@@ -105,18 +105,42 @@ def carregar_siconfi(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
         "no_anexo": "RREO-Anexo 02",
         "id_ente": ibge_id,
     }
-    data = get_json(SICONFI_URL, params)
-    if data is None:
-        return pd.DataFrame(), "Não foi possível acessar o SICONFI neste momento. Tente novamente e confira o portal oficial."
-    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
-        return pd.DataFrame(), "A resposta do SICONFI veio em formato inesperado. Não é possível concluir se existem ou não dados."
-    frame = pd.DataFrame(data["items"])
+    # ORDS costuma paginar os registros. Nunca tratar a primeira página
+    # como demonstrativo completo.
+    todas = []
+    limite = 1000
+    max_paginas = 20
+    completo = False
+    for pagina in range(max_paginas):
+        data = get_json(SICONFI_URL, {**params, "limit": limite, "offset": pagina * limite})
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            return pd.DataFrame(), (
+                "Falha ou formato inesperado durante a leitura paginada do SICONFI. "
+                "Nenhum resumo foi calculado para não usar um conjunto incompleto."
+            )
+        itens = data["items"]
+        todas.extend(itens)
+        if not data.get("hasMore", False):
+            completo = True
+            break
+        if not itens:
+            break
+    if not completo:
+        return pd.DataFrame(), (
+            "O demonstrativo excedeu o limite de páginas ou retornou paginação "
+            "inconsistente. Não foi usado para evitar dados parciais."
+        )
+    frame = pd.DataFrame(todas)
     if frame.empty:
-        return frame, "A consulta não retornou linhas para os parâmetros utilizados. Isso não comprova ausência de despesas ou de prestação de contas."
+        return frame, "O SICONFI não retornou linhas para os parâmetros selecionados."
     required = {"coluna", "conta", "valor"}
     if not required.issubset(frame.columns):
-        return frame, "O demonstrativo retornou campos diferentes dos esperados. Os totais foram omitidos para evitar interpretação incorreta."
-    return frame, "Consulta exploratória ao RREO/SICONFI. Antes de interpretar totais, confirme demonstrativo, período, unidade e classificação no portal oficial."
+        return frame, "O SICONFI não retornou todos os campos necessários ao resumo."
+    return frame, (
+        f"SICONFI: RREO Anexo 02, exercício {ano}, 6º bimestre. "
+        f"{len(frame)} linhas recebidas em {pagina + 1} página(s). "
+        "Valores acumulados de despesas liquidadas até o bimestre."
+    )
 
 
 def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]:
@@ -565,7 +589,7 @@ with st.sidebar:
     if admin_ok:
         st.success("Modo de entrega manual habilitado")
 
-key = f"pncp_v6_dados_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
+key = f"finance_v7_dados_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
 if consultar or key not in st.session_state:
     municipio = opcoes[cidade_label]
     with st.spinner("Consultando SICONFI e PNCP..."):
