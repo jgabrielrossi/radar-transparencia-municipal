@@ -145,7 +145,7 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
 
 
 def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Somente Prefeitura") -> tuple[pd.DataFrame, str]:
-    """Amostra de publicacoes do PNCP cujo orgao contratante e a prefeitura."""
+    """Amostra de contratações da prefeitura ou do Executivo municipal."""
     import unicodedata
 
     def normalizar(valor: object) -> str:
@@ -214,7 +214,7 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Some
                 excluidos += 1
                 continue
             # O municipio da unidade e o municipio do endereco, nao a entidade
-            # contratante. Exigimos denominacao exata da prefeitura/municipio.
+            # contratante. O escopo prefeitura exige a denominacao da entidade.
             nome_orgao = normalizar(orgao.get("razaoSocial"))
             prefeitura = nome_orgao in nomes_prefeitura
             if escopo == "Somente Prefeitura" and not prefeitura:
@@ -255,7 +255,7 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Some
     if falhas:
         detalhe = f"Atenção: {falhas} modalidade(s) falharam; amostra incompleta. " + detalhe
     if not linhas:
-        detalhe = "Não foram encontrados registros identificados como da prefeitura nesta amostra limitada. Isso não significa ausência de contratações. " + detalhe
+        detalhe = "Nenhum registro corresponde ao escopo selecionado nesta amostra limitada. Isso não significa ausência de contratações. " + detalhe
     return pd.DataFrame(linhas), detalhe
 
 
@@ -300,7 +300,7 @@ def criar_pdf(nome: str, uf: str, ano: int, resumo: pd.DataFrame, nota: str, pnc
     story.extend([Spacer(1, 8), Paragraph("Limitações e interpretação", styles["Heading2"]), Paragraph(html.escape(nota), body)])
     if pncp is not None:
         story.append(Paragraph("Contratações públicas — PNCP", styles["Heading2"]))
-        story.append(Paragraph(f"A amostra de dezembro retornou {len(pncp)} registro(s). As modalidades consultadas e a paginação limitam a cobertura; este resultado não é uma lista anual completa.", body))
+        story.append(Paragraph(f"A consulta amostral do PNCP retornou {len(pncp)} registro(s) no escopo selecionado. As modalidades, o período e a paginação limitam a cobertura; não é lista anual completa.", body))
         if not demonstracao and not pncp.empty:
             rows = [["Órgão", "Objeto", "Valor estimado (R$)"]]
             for _, row in pncp.head(8).iterrows():
