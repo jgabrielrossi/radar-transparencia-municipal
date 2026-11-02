@@ -1493,12 +1493,6 @@ with tab3:
             else:
                 st.caption("Nenhuma linha de Administração no retorno da consulta anterior.")
         st.markdown("##### Comparação regional — escolha do município")
-        try:
-            populacoes = populacoes_ibge_referencia(2024)
-        except Exception as exc:
-            populacoes = {}
-            st.warning(f"Falha na consulta de população do IBGE ({type(exc).__name__}).")
-        candidatos = selecionar_pares_regionais(r["municipio"], municipios, populacoes)
         regioes = {
             "Norte": ("RO", "AC", "AM", "RR", "PA", "AP", "TO"),
             "Nordeste": ("MA", "PI", "CE", "RN", "PB", "PE", "AL", "SE", "BA"),
@@ -1527,6 +1521,19 @@ with tab3:
             key="comparacao_municipio_regional",
         )
         escolhido_manual = manual_opcoes[escolha_regional]
+        # A escolha manual nunca depende do download populacional completo.
+        if escolhido_manual is None:
+            try:
+                populacoes = populacoes_ibge_referencia(2024)
+            except Exception as exc:
+                populacoes = {}
+                st.warning(f"Falha no IBGE ({type(exc).__name__}).")
+            candidatos = selecionar_pares_regionais(
+                r["municipio"], municipios, populacoes
+            )
+        else:
+            populacoes = {}
+            candidatos = []
         par, resumo_par, total_par = None, pd.DataFrame(), None
         nota_par = ""
         if escolhido_manual:
