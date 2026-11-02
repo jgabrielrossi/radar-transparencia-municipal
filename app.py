@@ -144,29 +144,53 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
     return summary, None, note
 
 
-def buscar_pncp(nome: str, uf: str, ano: int) -> tuple[pd.DataFrame, str]:
-    params = {
-        "dataInicial": f"{ano}0101", "dataFinal": f"{ano}1231", "uf": uf,
-        "texto": nome, "pagina": 1, "tamanhoPagina": 20,
-    }
-    data = get_json(PNCP_URL, params)
-    if data is None:
-        return pd.DataFrame(), "Não foi possível acessar o PNCP agora. A ausência de resultados não deve ser inferida a partir de uma falha de conexão."
-    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
-        return pd.DataFrame(), "O PNCP retornou formato inesperado; consulte diretamente o portal oficial."
-    rows = []
-    for item in data["data"]:
-        orgao = item.get("orgaoEntidade") or {}
-        rows.append({
-            "Órgão": orgao.get("razaoSocial") or "Não informado",
-            "Objeto": item.get("objetoCompra") or "Descrição não informada",
-            "Modalidade": item.get("modalidadeNome") or "Não informada",
-            "Valor estimado (R$)": pd.to_numeric(item.get("valorTotalEstimado"), errors="coerce"),
-            "Data de publicação": str(item.get("dataPublicacaoPncp") or "")[:10],
-            "Identificador PNCP": item.get("numeroControlePNCP") or "Não informado",
-        })
-    note = "A tela mostra somente a primeira página (até 20 registros) e pesquisa por texto do município. Não representa necessariamente todas as contratações municipais."
-    return pd.DataFrame(rows), note
+def buscar_pncp(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
+    """Amostra PNCP: dezembro, modalidades 6 e 8; primeira pagina de cada."""
+    # API de publicacao exige codigoModalidadeContratacao. O filtro geográfico
+    # oficial e o código IBGE da unidade administrativa, não busca textual.
+    modalidades = {6: "Pregão eletrônico", 8: "Dispensa de licitação"}
+    linhas = []
+    sucesso = 0
+    falhas = 0
+    for codigo, modalidade in modalidades.items():
+        params = {
+            "dataInicial": f"{ano}1201",
+            "dataFinal": f"{ano}1230",
+            "codigoModalidadeContratacao": codigo,
+            "codigoMunicipioIbge": ibge_id,
+            "pagina": 1,
+            "tamanhoPagina": 20,
+        }
+        data = get_json(PNCP_URL, params)
+        if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+            falhas += 1
+            continue
+        sucesso += 1
+        for item in data["data"]:
+            if not isinstance(item, dict):
+                continue
+            orgao = item.get("orgaoEntidade") or {}
+            linhas.append({
+                "Órgão": orgao.get("razaoSocial") or "Não informado",
+                "Objeto": item.get("objetoCompra") or "Descrição não informada",
+                "Modalidade": item.get("modalidadeNome") or modalidade,
+                "Valor estimado (R$)": pd.to_numeric(item.get("valorTotalEstimado"), errors="coerce"),
+                "Data de publicação": str(item.get("dataPublicacaoPncp") or "")[:10],
+                "Identificador PNCP": item.get("numeroControlePNCP") or "Não informado",
+            })
+    detalhe = (
+        f"Amostra de 01/12 a 30/12/{ano}, modalidades pregão eletrônico (6) e "
+        "dispensa de licitação (8), primeira página (até 20 resultados) por modalidade. "
+        "Filtro geográfico pela unidade administrativa localizada no município, "
+        "não necessariamente pela prefeitura. Não é levantamento anual completo."
+    )
+    if not sucesso:
+        return pd.DataFrame(), "O PNCP não respondeu às consultas com os parâmetros oficiais. " + detalhe + " Consulte os logs para verificar erros HTTP ou bloqueios."
+    if falhas:
+        detalhe = f"Atenção: {falhas} modalidade(s) falharam; resultado incompleto. " + detalhe
+    if not linhas:
+        detalhe = "Nenhum registro encontrado na amostra consultada; não significa ausência de contratações. " + detalhe
+    return pd.DataFrame(linhas), detalhe
 
 
 def moeda(valor: float) -> str:
@@ -210,7 +234,7 @@ def criar_pdf(nome: str, uf: str, ano: int, resumo: pd.DataFrame, nota: str, pnc
     story.extend([Spacer(1, 8), Paragraph("Limitações e interpretação", styles["Heading2"]), Paragraph(html.escape(nota), body)])
     if pncp is not None:
         story.append(Paragraph("Contratações públicas — PNCP", styles["Heading2"]))
-        story.append(Paragraph(f"A consulta exibida na aplicação retornou {len(pncp)} registro(s) nesta página. O resultado não é uma lista completa de todas as contratações do município.", body))
+        story.append(Paragraph(f"A amostra de dezembro retornou {len(pncp)} registro(s). As modalidades consultadas e a paginação limitam a cobertura; este resultado não é uma lista anual completa.", body))
         if not demonstracao and not pncp.empty:
             rows = [["Órgão", "Objeto", "Valor estimado (R$)"]]
             for _, row in pncp.head(8).iterrows():
@@ -254,7 +278,7 @@ if consultar or key not in st.session_state:
     with st.spinner("Consultando SICONFI e PNCP..."):
         raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
         resumo, total, nota_resumo = processar_resumo(raw)
-        pncp, nota_pncp = buscar_pncp(municipio["nome"], municipio["uf"], ano)
+        pncp, nota_pncp = buscar_pncp(municipio["id"], ano)
         st.session_state[key] = {"municipio": municipio, "ano": ano, "raw": raw, "resumo": resumo, "total": total, "nota": f"{nota_siconfi} {nota_resumo}", "pncp": pncp, "nota_pncp": nota_pncp}
 r = st.session_state[key]
 
