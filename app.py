@@ -504,6 +504,43 @@ def criar_pdf(
                 f"Amostra com {limite} de {len(resumo)} funções identificadas. "
                 "O relatório completo apresenta as demais linhas válidas.", pequeno,
             ))
+        if not demonstracao:
+            story.append(Spacer(1, 7))
+            story.append(Paragraph("Leitura orientada das despesas", estilos["Heading3"]))
+            top3 = resumo.head(3)
+            top3_nomes = ", ".join(str(v) for v in top3["conta"].tolist())
+            if len(top3) == 3 and top3["percentual"].notna().all():
+                participacao = float(top3["percentual"].sum())
+                story.append(Paragraph(
+                    f"Concentração: {html.escape(top3_nomes)} respondem por "
+                    f"{participacao:.1f}% do total de referência (I) de despesas "
+                    "liquidadas neste demonstrativo. A concentração mostra a "
+                    "distribuição por função, não comprova qualidade dos serviços "
+                    "nem irregularidades.", corpo,
+                ))
+            else:
+                story.append(Paragraph(
+                    "Concentração percentual indisponível: não foi possível "
+                    "validar os percentuais de três funções distintas.", corpo,
+                ))
+            if len(resumo) > 1:
+                maior = resumo.iloc[0]
+                segunda = resumo.iloc[1]
+                diferenca = float(maior["valor"]) - float(segunda["valor"])
+                story.append(Paragraph(
+                    f"Comparação: {html.escape(str(maior['conta']))} registra "
+                    f"{moeda(float(maior['valor']))}, cerca de {moeda(diferenca)} "
+                    f"a mais do que {html.escape(str(segunda['conta']))}. "
+                    "A diferença não permite concluir se houve insuficiência "
+                    "ou excesso de recursos em qualquer área.", corpo,
+                ))
+            story.append(Paragraph(
+                "Para aprofundar: comparar os mesmos indicadores com outros "
+                "exercícios, metas dos programas e entregas dos serviços públicos. "
+                "Os dados atuais mostram a função orçamentária, mas não a "
+                "execução física das políticas nem os pagamentos por fornecedor.", corpo,
+            ))
+
 
     story.append(Spacer(1, 8))
     story.append(Paragraph("2. Contratações publicadas — PNCP", estilos["Heading2"]))
@@ -545,6 +582,66 @@ def criar_pdf(
                 par(valor_texto),
             ])
         story.append(tabela(linhas, [53*mm, 79*mm, 40*mm]))
+        if not demonstracao:
+            story.append(Spacer(1, 7))
+            story.append(Paragraph("Leitura orientada das contratações", estilos["Heading3"]))
+            valores = pd.to_numeric(pncp["Valor estimado (R$)"], errors="coerce")
+            qtd_zeros = int((valores == 0).sum())
+            qtd_sem_valor = int(valores.isna().sum())
+            qtd_positivos = int((valores > 0).sum())
+            unidades = pncp.get("Unidade administrativa")
+            if unidades is not None:
+                unidades_validas = unidades.fillna("Não informada").astype(str)
+                if not unidades_validas.empty:
+                    mais_frequente = unidades_validas.value_counts().index[0]
+                    frequencia = int(unidades_validas.value_counts().iloc[0])
+                    story.append(Paragraph(
+                        f"Unidade mais frequente na amostra: "
+                        f"{html.escape(str(mais_frequente))}, com {frequencia} "
+                        f"dos {len(pncp)} registros retornados. Isso mede apenas "
+                        "a frequência de publicações na amostra, não o volume "
+                        "de pagamentos dessa unidade.", corpo,
+                    ))
+            if qtd_positivos:
+                indices_maiores = valores[valores > 0].nlargest(3).index
+                destaques = []
+                for indice in indices_maiores:
+                    item = pncp.loc[indice]
+                    identificador = str(item.get("Identificador PNCP") or "não informado")
+                    destaque = (
+                        f"{moeda(float(valores.loc[indice]))} "
+                        f"(PNCP {identificador})"
+                    )
+                    destaques.append(destaque)
+                story.append(Paragraph(
+                    "Maiores valores estimados entre os registros retornados: "
+                    + html.escape("; ".join(destaques))
+                    + ". São estimativas de contratações publicadas, "
+                    "não pagamentos comprovados ou ranking completo do ano.",
+                    corpo,
+                ))
+            if qtd_zeros or qtd_sem_valor:
+                story.append(Paragraph(
+                    f"Qualidade dos dados: {qtd_zeros} registro(s) com valor "
+                    f"estimado zero e {qtd_sem_valor} sem valor numérico. "
+                    "É necessário conferir os respectivos registros oficiais "
+                    "antes de interpretar esses valores; zero não comprova "
+                    "contratação gratuita.", corpo,
+                ))
+            if "HTTP 429" in contexto_pncp or "Falhas:" in contexto_pncp:
+                story.append(Paragraph(
+                    "Limite crítico desta análise: a API não entregou todas as "
+                    "páginas solicitadas. Não é possível calcular com segurança "
+                    "o total anual de contratações, nem compará-lo à despesa "
+                    "liquidada do SICONFI.", corpo,
+                ))
+            story.append(Paragraph(
+                "Próximas verificações recomendadas: abrir os identificadores "
+                "PNCP destacados, conferir os editais, eventuais contratos "
+                "assinados, fornecedores, aditivos e dados de pagamentos no "
+                "portal de transparência do município.", corpo,
+            ))
+
 
     story.append(Spacer(1, 5))
     story.append(Paragraph("3. Fontes e limites da consulta", estilos["Heading2"]))
