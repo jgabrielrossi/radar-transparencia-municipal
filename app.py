@@ -172,21 +172,72 @@ def carregar_siconfi(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
     )
 
 
-def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]:
-    """Seleciona somente funcoes do Anexo 02; nao soma subfuncoes nem totais."""
+def normalizar_contabil(valor: object) -> str:
     import unicodedata
+    return " ".join(
+        unicodedata.normalize("NFKD", str(valor or ""))
+        .encode("ascii", "ignore").decode("ascii").upper().split()
+    )
 
-    def norm(valor: object) -> str:
-        return " ".join(
-            unicodedata.normalize("NFKD", str(valor)).encode("ascii", "ignore")
-            .decode("ascii").upper().split()
-        )
 
+def selecionar_coluna_liquidada(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or not {"coluna", "conta", "valor"}.issubset(df.columns):
+        return pd.DataFrame()
+    dados = df.copy()
+    nomes_coluna = dados["coluna"].map(normalizar_contabil)
+    dados = dados[
+        nomes_coluna.str.contains("DESPESAS LIQUIDADAS", na=False)
+        & nomes_coluna.str.contains("ATE O BIMESTRE", na=False)
+    ].copy()
+    if dados.empty:
+        return dados
+    dados["_conta_norm"] = dados["conta"].map(normalizar_contabil)
+    dados["valor"] = pd.to_numeric(dados["valor"], errors="coerce")
+    return dados.dropna(subset=["valor"])
+
+
+def extrair_totais_rreo(df: pd.DataFrame) -> dict[str, float | None]:
+    """Valores das linhas oficiais (I), (II) e (III), nunca somas de subfunções."""
+    dados = selecionar_coluna_liquidada(df)
+    resposta: dict[str, float | None] = {"I": None, "II": None, "III": None}
+    if dados.empty:
+        return resposta
+    labels = {
+        "I": "DESPESAS (EXCETO INTRA-ORCAMENTARIAS)",
+        "II": "DESPESAS (INTRA-ORCAMENTARIAS)",
+        "III": "TOTAL",
+    }
+    for chave, prefixo in labels.items():
+        linhas = dados[dados["_conta_norm"].str.startswith(prefixo, na=False)]
+        if chave == "III":
+            linhas = linhas[
+                linhas["_conta_norm"].str.contains("III", na=False)
+                & linhas["_conta_norm"].str.contains("I + II", regex=False, na=False)
+            ]
+        else:
+            linhas = linhas[
+                linhas["_conta_norm"].str.contains(f"({chave})", regex=False, na=False)
+            ]
+        distintos = linhas["valor"].round(2).unique()
+        if len(distintos) == 1 and pd.notna(distintos[0]):
+            resposta[chave] = float(distintos[0])
+    # Aceitar III = I + II só se ambos os totais oficiais foram identificados.
+    if resposta["III"] is None and resposta["I"] is not None and resposta["II"] is not None:
+        resposta["III"] = round(resposta["I"] + resposta["II"], 2)
+    if all(resposta[k] is not None for k in ("I", "II", "III")):
+        if abs(resposta["I"] + resposta["II"] - resposta["III"]) > 0.02:
+            resposta["III"] = None  # quadros inconsistentes: não divulgar total global
+    return resposta
+
+
+def processar_resumo(
+    df: pd.DataFrame, codigos_referencia: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, float | None, str]:
+    """Funções do RREO, isolando linhas de quadros intraorçamentários."""
     if df.empty:
         return pd.DataFrame(), None, ""
-    required = {"conta", "coluna", "valor"}
-    if not required.issubset(df.columns):
-        return pd.DataFrame(), None, "Faltam os campos necessários no demonstrativo do SICONFI."
+    if not {"conta", "coluna", "valor"}.issubset(df.columns):
+        return pd.DataFrame(), None, "O SICONFI não retornou os campos necessários."
 
     funcoes = {
         "LEGISLATIVA", "JUDICIARIA", "ESSENCIAL A JUSTICA", "ADMINISTRACAO",
@@ -198,61 +249,69 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
         "COMERCIO E SERVICOS", "COMUNICACOES", "ENERGIA", "TRANSPORTE",
         "DESPORTO E LAZER", "ENCARGOS ESPECIAIS", "RESERVA DE CONTINGENCIA",
     }
-    dados = df.copy()
-    colunas = dados["coluna"].map(norm)
-    dados = dados[
-        colunas.str.contains("DESPESAS LIQUIDADAS", na=False)
-        & colunas.str.contains("ATE O BIMESTRE", na=False)
-    ].copy()
+    dados = selecionar_coluna_liquidada(df)
     if dados.empty:
-        return pd.DataFrame(), None, "A coluna de despesas liquidadas até o bimestre não foi encontrada."
-    dados["_conta_norm"] = dados["conta"].map(norm)
-    dados["valor"] = pd.to_numeric(dados["valor"], errors="coerce")
-    dados = dados.dropna(subset=["valor"])
-    # O nome exato da função é uma classificação contábil conhecida.
-    # Subfunções, códigos FUxx, totais e intra-orçamentárias não entram.
+        return pd.DataFrame(), None, "Coluna de despesas liquidadas até o bimestre indisponível."
     linhas = dados[dados["_conta_norm"].isin(funcoes)].copy()
     if linhas.empty:
-        return pd.DataFrame(), None, (
-            "Não foi possível identificar linhas exclusivas de função no Anexo 02. "
-            "Subfunções e totais não foram somados para evitar dupla contagem."
-        )
-    # Uma única função pode aparecer em diferentes quadros ou classificações.
-    # Se houver valores conflitantes, omitir essa função até validar a fonte.
+        return pd.DataFrame(), None, "O Anexo 02 não retornou linhas individuais de funções."
+
+    for campo in ("cod_conta", "rotulo", "quadro"):
+        if campo not in linhas.columns:
+            linhas[campo] = ""
+        linhas[f"_norm_{campo}"] = linhas[campo].map(normalizar_contabil)
+    # Linhas explicitamente classificadas como intra não entram no detalhamento
+    # do total (I). Preservar as demais sem presumir quadros desconhecidos.
+    linhas = linhas[
+        ~linhas[["_norm_cod_conta", "_norm_rotulo", "_norm_quadro"]]
+        .apply(lambda c: c.str.contains("INTRA", na=False))
+        .any(axis=1)
+    ].copy()
     grupos = []
     conflitos = []
-    for conta_norm, grupo in linhas.groupby("_conta_norm"):
+    referencias = codigos_referencia or {}
+    for nome, grupo in linhas.groupby("_conta_norm"):
+        ref = referencias.get(nome)
+        if ref:
+            correspondentes = grupo[grupo["_norm_cod_conta"] == ref]
+            if not correspondentes.empty:
+                grupo = correspondentes
         valores = grupo["valor"].round(2).unique()
         if len(valores) != 1:
-            conflitos.append(conta_norm)
+            conflitos.append(nome)
             continue
-        grupos.append({"conta": str(grupo.iloc[0]["conta"]), "valor": float(valores[0])})
+        # Preserve codigo apenas quando um codigo consistente identifica a linha.
+        codigos = [c for c in grupo["_norm_cod_conta"].unique() if c]
+        codigo = codigos[0] if len(codigos) == 1 else ""
+        grupos.append({
+            "conta": str(grupo.iloc[0]["conta"]),
+            "valor": float(valores[0]), "cod_conta": codigo,
+        })
     if not grupos:
-        return pd.DataFrame(), None, "As linhas das funções apresentam valores conflitantes; nenhum total foi calculado."
+        return pd.DataFrame(), None, "Valores conflitantes nas funções: resumo omitido."
     resumo = pd.DataFrame(grupos).sort_values("valor", ascending=False).reset_index(drop=True)
-    # Referência oficial: total de despesas EXCETO intra-orçamentárias (I).
-    # Não calcular o percentual em relação à soma arbitrária das linhas.
-    denominador = dados[
-        dados["_conta_norm"].str.startswith("DESPESAS (EXCETO INTRA-ORCAMENTARIAS)")
-    ]["valor"].round(2).unique()
-    total = float(denominador[0]) if len(denominador) == 1 and denominador[0] > 0 else None
-    if total is not None:
+    total = extrair_totais_rreo(df)["I"]
+    if total is not None and total > 0:
         resumo["percentual"] = (resumo["valor"] / total * 100).round(2)
     else:
         resumo["percentual"] = float("nan")
     nota = (
-        "RREO Anexo 02: despesas LIQUIDADAS até o 6º bimestre. Exibidas apenas "
-        "funções orçamentárias (Saúde, Educação etc.), sem somar subfunções ou "
-        "totais, evitando a dupla contagem. Os valores não representam compras "
-        "individualizadas, fornecedores ou pagamentos efetivos. "
+        "RREO Anexo 02: despesas LIQUIDADAS até o 6º bimestre. "
+        "São exibidas funções sem somar subfunções e sem linhas identificadas "
+        "como intraorçamentárias. Não são pagamentos a fornecedores. "
     )
-    if total is None:
-        nota += "O total oficial de referência (I) não pôde ser validado; percentuais omitidos. "
+    if total is not None:
+        nota += "Participação percentual calculada sobre o total oficial (I). "
     else:
-        nota += "Percentuais calculados sobre DESPESAS (EXCETO INTRA-ORÇAMENTÁRIAS) (I). "
+        nota += "Total oficial (I) não validado; percentuais omitidos. "
     if conflitos:
-        nota += f"{len(conflitos)} função(ões) com dados conflitantes foram omitidas. "
+        nota += (
+            f"{len(conflitos)} função(ões) continuam sem valor único após "
+            "separar os quadros; não foram estimadas. Funções: "
+            + ", ".join(conflitos[:8]) + ". "
+        )
     return resumo, total, nota
+
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1153,7 +1212,14 @@ with tab3:
         st.warning("Use esta área somente depois de confirmar o pagamento fora do aplicativo. Confira município e exercício do pedido antes de gerar o arquivo. O app não verifica Pix nem registra pedidos pagos.")
         with st.spinner("Consultando o ano anterior no SICONFI..."):
             raw_anterior, nota_anterior = carregar_siconfi(r["municipio"]["id"], r["ano"] - 1)
-            resumo_anterior, _, nota_calculo_anterior = processar_resumo(raw_anterior)
+            referencias = {
+                normalizar_contabil(linha["conta"]): str(linha["cod_conta"])
+                for _, linha in r["resumo"].iterrows()
+                if str(linha.get("cod_conta") or "")
+            }
+            resumo_anterior, _, nota_calculo_anterior = processar_resumo(
+                raw_anterior, codigos_referencia=referencias
+            )
             if nota_calculo_anterior:
                 nota_anterior += " " + nota_calculo_anterior
             atual_simplificado = "RREO Simplificado" in r["nota"]
