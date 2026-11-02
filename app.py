@@ -120,28 +120,86 @@ def carregar_siconfi(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
 
 
 def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]:
+    """Seleciona somente funcoes do Anexo 02; nao soma subfuncoes nem totais."""
     import unicodedata
+
+    def norm(valor: object) -> str:
+        return " ".join(
+            unicodedata.normalize("NFKD", str(valor)).encode("ascii", "ignore")
+            .decode("ascii").upper().split()
+        )
+
     if df.empty:
-        return pd.DataFrame(), None, "A consulta ao SICONFI não retornou linhas. Isso não significa que não existam despesas."
-    needed = {"coluna", "conta", "valor"}
-    if not needed.issubset(df.columns):
-        return pd.DataFrame(), None, "Campos recebidos da API: " + ", ".join(map(str, df.columns[:15]))
-    def norm(x):
-        return " ".join(unicodedata.normalize("NFKD", str(x)).encode("ascii", "ignore").decode("ascii").upper().split())
-    work = df.copy()
-    headers = work["coluna"].map(norm)
-    work = work[headers.str.contains("LIQUIDAD", na=False) & headers.str.contains("ATE O BIMESTRE", na=False)].copy()
-    if work.empty:
-        return pd.DataFrame(), None, "Não foi localizada a coluna de despesas liquidadas até o bimestre. Colunas recebidas: " + ", ".join(map(str, df["coluna"].dropna().unique()[:8]))
-    work["valor"] = pd.to_numeric(work["valor"], errors="coerce")
-    work = work.dropna(subset=["valor", "conta"])
-    work = work[~work["conta"].astype(str).str.contains("TOTAL", case=False, na=False)]
-    if work.empty:
-        return pd.DataFrame(), None, "Não restaram linhas de despesas liquidadas para exibição."
-    summary = work[["conta", "valor"]].drop_duplicates().sort_values("valor", ascending=False)
-    summary["percentual"] = 0.0
-    note = "Despesas liquidadas até o bimestre, RREO Anexo 02. Funções e subfunções podem se sobrepor; não some as linhas nem interprete os percentuais como participação no total."
-    return summary, None, note
+        return pd.DataFrame(), None, "O SICONFI não retornou linhas para a consulta."
+    required = {"conta", "coluna", "valor"}
+    if not required.issubset(df.columns):
+        return pd.DataFrame(), None, "Faltam os campos necessários no demonstrativo do SICONFI."
+
+    funcoes = {
+        "LEGISLATIVA", "JUDICIARIA", "ESSENCIAL A JUSTICA", "ADMINISTRACAO",
+        "DEFESA NACIONAL", "SEGURANCA PUBLICA", "RELACOES EXTERIORES",
+        "ASSISTENCIA SOCIAL", "PREVIDENCIA SOCIAL", "SAUDE", "TRABALHO",
+        "EDUCACAO", "CULTURA", "DIREITOS DA CIDADANIA", "URBANISMO",
+        "HABITACAO", "SANEAMENTO", "GESTAO AMBIENTAL", "CIENCIA E TECNOLOGIA",
+        "AGRICULTURA", "ORGANIZACAO AGRARIA", "INDUSTRIA",
+        "COMERCIO E SERVICOS", "COMUNICACOES", "ENERGIA", "TRANSPORTE",
+        "DESPORTO E LAZER", "ENCARGOS ESPECIAIS", "RESERVA DE CONTINGENCIA",
+    }
+    dados = df.copy()
+    colunas = dados["coluna"].map(norm)
+    dados = dados[
+        colunas.str.contains("DESPESAS LIQUIDADAS", na=False)
+        & colunas.str.contains("ATE O BIMESTRE", na=False)
+    ].copy()
+    if dados.empty:
+        return pd.DataFrame(), None, "A coluna de despesas liquidadas até o bimestre não foi encontrada."
+    dados["_conta_norm"] = dados["conta"].map(norm)
+    dados["valor"] = pd.to_numeric(dados["valor"], errors="coerce")
+    dados = dados.dropna(subset=["valor"])
+    # O nome exato da função é uma classificação contábil conhecida.
+    # Subfunções, códigos FUxx, totais e intra-orçamentárias não entram.
+    linhas = dados[dados["_conta_norm"].isin(funcoes)].copy()
+    if linhas.empty:
+        return pd.DataFrame(), None, (
+            "Não foi possível identificar linhas exclusivas de função no Anexo 02. "
+            "Subfunções e totais não foram somados para evitar dupla contagem."
+        )
+    # Uma única função pode aparecer em diferentes quadros ou classificações.
+    # Se houver valores conflitantes, omitir essa função até validar a fonte.
+    grupos = []
+    conflitos = []
+    for conta_norm, grupo in linhas.groupby("_conta_norm"):
+        valores = grupo["valor"].round(2).unique()
+        if len(valores) != 1:
+            conflitos.append(conta_norm)
+            continue
+        grupos.append({"conta": str(grupo.iloc[0]["conta"]), "valor": float(valores[0])})
+    if not grupos:
+        return pd.DataFrame(), None, "As linhas das funções apresentam valores conflitantes; nenhum total foi calculado."
+    resumo = pd.DataFrame(grupos).sort_values("valor", ascending=False).reset_index(drop=True)
+    # Referência oficial: total de despesas EXCETO intra-orçamentárias (I).
+    # Não calcular o percentual em relação à soma arbitrária das linhas.
+    denominador = dados[
+        dados["_conta_norm"].str.startswith("DESPESAS (EXCETO INTRA-ORCAMENTARIAS)")
+    ]["valor"].round(2).unique()
+    total = float(denominador[0]) if len(denominador) == 1 and denominador[0] > 0 else None
+    if total is not None:
+        resumo["percentual"] = (resumo["valor"] / total * 100).round(2)
+    else:
+        resumo["percentual"] = float("nan")
+    nota = (
+        "RREO Anexo 02: despesas LIQUIDADAS até o 6º bimestre. Exibidas apenas "
+        "funções orçamentárias (Saúde, Educação etc.), sem somar subfunções ou "
+        "totais, evitando a dupla contagem. Os valores não representam compras "
+        "individualizadas, fornecedores ou pagamentos efetivos. "
+    )
+    if total is None:
+        nota += "O total oficial de referência (I) não pôde ser validado; percentuais omitidos. "
+    else:
+        nota += "Percentuais calculados sobre DESPESAS (EXCETO INTRA-ORÇAMENTÁRIAS) (I). "
+    if conflitos:
+        nota += f"{len(conflitos)} função(ões) com dados conflitantes foram omitidas. "
+    return resumo, total, nota
 
 
 def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: str, escopo: str = "Prefeitura / Administração Direta") -> tuple[pd.DataFrame, str, pd.DataFrame]:
@@ -428,14 +486,14 @@ st.caption("Fontes: SICONFI/Tesouro Nacional e Portal Nacional de Contratações
 tab1, tab2, tab3 = st.tabs(["📊 Orçamento", "📑 Contratações", "📄 Relatório de R$ 29"])
 
 with tab1:
-    st.subheader("Despesas liquidadas — RREO Anexo 02")
+    st.subheader("Onde foram liquidadas as despesas — por função orçamentária")
     st.info(r["nota"])
     if not r["resumo"].empty:
         c1, c2 = st.columns(2)
-        c1.metric("Maior linha exibida", moeda(float(r["resumo"]["valor"].max())))
-        c2.metric("Linhas retornadas", len(r["resumo"]))
-        st.caption("As linhas podem se sobrepor. Não devem ser somadas.")
-        st.plotly_chart(px.bar(r["resumo"].head(12).sort_values("valor"), x="valor", y="conta", orientation="h", title="Maiores linhas retornadas"), width="stretch")
+        c1.metric("Maior função exibida", moeda(float(r["resumo"]["valor"].max())))
+        c2.metric("Funções identificadas", len(r["resumo"]))
+        st.caption("Valores por função, sem somar subfunções. Referência: despesas liquidadas até o 6º bimestre.")
+        st.plotly_chart(px.bar(r["resumo"].head(12).sort_values("valor"), x="valor", y="conta", orientation="h", title="Áreas orçamentárias com maiores despesas liquidadas"), width="stretch")
         st.dataframe(r["resumo"], width="stretch", hide_index=True)
         st.download_button("Baixar tabela exibida (CSV)", r["resumo"].to_csv(index=False).encode("utf-8-sig"), file_name=f"radar_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
