@@ -824,7 +824,7 @@ def localizar_municipio_comparavel(
 ) -> tuple[dict[str, str] | None, pd.DataFrame, float | None, str]:
     """Busca primeiros candidatos com RREO oficial compatível."""
     pops = dict(pop_base)
-    for ident, nome, uf in candidatos[:10]:
+    for ident, nome, uf in candidatos[:6]:
         raw, nota = carregar_siconfi(ident, ano)
         if raw.empty:
             continue
@@ -845,7 +845,7 @@ def localizar_municipio_comparavel(
         )
     return None, pd.DataFrame(), None, (
         "Não foi encontrado par com dados SICONFI suficientes entre as "
-        "primeiras dez localidades de porte semelhante. "
+        "primeiras seis localidades de porte semelhante. "
         "Comparação regional omitida, sem inventar valores."
     )
 
@@ -1493,15 +1493,79 @@ with tab3:
                 )
             else:
                 st.caption("Nenhuma linha de Administração no retorno da consulta anterior.")
-        with st.spinner("Buscando município de porte semelhante para comparação..."):
+        st.markdown("##### Comparação regional — escolha do município")
+        try:
             populacoes = populacoes_ibge_referencia(2024)
-            candidatos = selecionar_pares_regionais(r["municipio"], municipios, populacoes)
-            par, resumo_par, total_par, nota_par = localizar_municipio_comparavel(
-                r["municipio"], r["ano"],
-                tuple((x["id"], x["nome"], x["uf"]) for x in candidatos),
-                tuple(sorted((x, populacoes[x]) for x in
-                             [r["municipio"]["id"]] + [m["id"] for m in candidatos]
-                             if x in populacoes)),
+        except Exception as exc:
+            populacoes = {}
+            st.warning(f"Falha na consulta de população do IBGE ({type(exc).__name__}).")
+        candidatos = selecionar_pares_regionais(r["municipio"], municipios, populacoes)
+        regioes = {
+            "Norte": ("RO", "AC", "AM", "RR", "PA", "AP", "TO"),
+            "Nordeste": ("MA", "PI", "CE", "RN", "PB", "PE", "AL", "SE", "BA"),
+            "Sudeste": ("MG", "ES", "RJ", "SP"),
+            "Sul": ("PR", "SC", "RS"),
+            "Centro-Oeste": ("MS", "MT", "GO", "DF"),
+        }
+        regiao_atual = next(
+            (nome_regiao for nome_regiao, estados in regioes.items()
+             if r["municipio"]["uf"] in estados), None
+        )
+        municipios_da_regiao = [
+            m for m in municipios
+            if m["id"] != r["municipio"]["id"]
+            and regiao_atual
+            and m["uf"] in regioes[regiao_atual]
+        ]
+        manual_opcoes = {"Seleção automática por população": None}
+        manual_opcoes.update({
+            f"{m['nome']} - {m['uf']}": m for m in municipios_da_regiao
+        })
+        escolha_regional = st.selectbox(
+            "Município de referência (opcional)",
+            list(manual_opcoes),
+            help="Automático: busca população parecida. Manual: você pode indicar outro município da mesma região, mas só com população validada e diferença até 25%.",
+            key="comparacao_municipio_regional",
+        )
+        escolhido_manual = manual_opcoes[escolha_regional]
+        par, resumo_par, total_par = None, pd.DataFrame(), None
+        nota_par = ""
+        if escolhido_manual:
+            try:
+                origem_pop = populacoes.get(r["municipio"]["id"]) or populacao_ibge_individual(r["municipio"]["id"])
+                destino_pop = populacoes.get(escolhido_manual["id"]) or populacao_ibge_individual(escolhido_manual["id"])
+                if origem_pop:
+                    populacoes[r["municipio"]["id"]] = origem_pop
+                if destino_pop:
+                    populacoes[escolhido_manual["id"]] = destino_pop
+                if not origem_pop or not destino_pop:
+                    nota_par = "População IBGE indisponível para verificar o porte; comparação omitida."
+                elif abs(destino_pop - origem_pop) / origem_pop > 0.25:
+                    nota_par = "O município escolhido difere mais de 25% em população; comparação omitida."
+                else:
+                    with st.spinner("Consultando município escolhido no SICONFI..."):
+                        par, resumo_par, total_par, nota_par = localizar_municipio_comparavel(
+                            r["municipio"], r["ano"],
+                            ((escolhido_manual["id"], escolhido_manual["nome"], escolhido_manual["uf"]),),
+                            tuple(sorted(populacoes.items())),
+                        )
+            except Exception as exc:
+                nota_par = f"Consulta regional indisponível ({type(exc).__name__})."
+        elif candidatos:
+            try:
+                with st.spinner("Consultando municípios de porte semelhante no SICONFI..."):
+                    par, resumo_par, total_par, nota_par = localizar_municipio_comparavel(
+                        r["municipio"], r["ano"],
+                        tuple((x["id"], x["nome"], x["uf"]) for x in candidatos),
+                        tuple(sorted(populacoes.items())),
+                    )
+            except Exception as exc:
+                nota_par = f"Comparação regional indisponível ({type(exc).__name__})."
+        else:
+            nota_par = (
+                "Não foi possível obter uma lista de pares por população. "
+                "Escolha manualmente um município da mesma região para tentar "
+                "validar o porte pela consulta individual do IBGE."
             )
         # Não misturar RREO comum e simplificado na comparação sem auditoria.
         if par is not None:
