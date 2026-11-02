@@ -187,15 +187,16 @@ def criar_pdf(nome: str, uf: str, ano: int, resumo: pd.DataFrame, nota: str, pnc
     story.append(Paragraph("Este relatório organiza dados públicos disponíveis na consulta. Não comprova irregularidade, fraude, corrupção ou conformidade legal. Verifique os dados nas fontes oficiais antes de publicar conclusões.", body))
     story.append(Spacer(1, 5))
     if not demonstracao and not resumo.empty:
-        story.append(Paragraph("Resumo executivo", styles["Heading2"]))
-        total_exploratorio = float(resumo["valor"].sum())
-        top3 = resumo.head(3)
-        top_text = "; ".join(f"{str(row['conta'])}: {moeda(float(row['valor']))} ({float(row['percentual']):.1f}%)" for _, row in top3.iterrows())
-        story.append(Paragraph(f"A soma exploratória das categorias filtradas foi de {moeda(total_exploratorio)}. As três maiores categorias retornadas foram: {html.escape(top_text)}. Esse resumo descreve somente as linhas recebidas e filtradas pela consulta, não um total anual contábil validado.", body))
+        story.append(Paragraph("Resumo das linhas consultadas", styles["Heading2"]))
+        story.append(Paragraph(
+            "Os valores são de despesas liquidadas até o bimestre no RREO Anexo 02. "
+            "As linhas de função e subfunção podem se sobrepor e não devem ser somadas.",
+            body,
+        ))
     if not resumo.empty:
-        rows = [["Conta retornada pela fonte", "Valor agregado (R$)", "Participação"]]
+        rows = [["Conta retornada pela fonte", "Valor da linha (R$)", "Percentual"]]
         for _, row in resumo.head(5 if demonstracao else 12).iterrows():
-            rows.append([Paragraph(html.escape(str(row["conta"])), body), moeda(float(row["valor"])), f"{float(row['percentual']):.1f}%"])
+            rows.append([Paragraph(html.escape(str(row["conta"])), body), moeda(float(row["valor"])), "N/A"])
         table = Table(rows, colWidths=[83*mm, 43*mm, 28*mm], repeatRows=1)
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2B6CB0")),
@@ -219,7 +220,7 @@ def criar_pdf(nome: str, uf: str, ano: int, resumo: pd.DataFrame, nota: str, pnc
             table = Table(rows, colWidths=[45*mm, 75*mm, 34*mm], repeatRows=1)
             table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2B6CB0")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey), ("FONTSIZE", (0, 0), (-1, -1), 7), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
             story.append(table)
-    story.extend([Spacer(1, 10), Paragraph("Fontes e metodologia", styles["Heading2"]), Paragraph("Fontes utilizadas conforme disponibilidade: API de localidades do IBGE, SICONFI/Tesouro Nacional e PNCP. O SICONFI foi consultado com os parâmetros apresentados no aplicativo; o PNCP mostra apenas a primeira página. A agregação de valores é exploratória e requer validação contábil para interpretações formais.", body), Paragraph("Links: https://servicodados.ibge.gov.br/ ; https://siconfi.tesouro.gov.br/ ; https://pncp.gov.br/", body)])
+    story.extend([Spacer(1, 10), Paragraph("Fontes e metodologia", styles["Heading2"]), Paragraph("Fontes utilizadas conforme disponibilidade: API de localidades do IBGE, SICONFI/Tesouro Nacional e PNCP. O SICONFI foi consultado com os parâmetros apresentados no aplicativo; o PNCP mostra apenas a primeira página. As linhas do Anexo 02 podem refletir funções e subfunções sobrepostas e não devem ser somadas.", body), Paragraph("Links: https://servicodados.ibge.gov.br/ ; https://siconfi.tesouro.gov.br/ ; https://pncp.gov.br/", body)])
     doc.build(story)
     return buffer.getvalue()
 
@@ -267,9 +268,9 @@ with tab1:
     if not r["resumo"].empty:
         c1, c2 = st.columns(2)
         c1.metric("Maior linha exibida", moeda(float(r["resumo"]["valor"].max())))
-        c2.metric("Categorias retornadas", len(r["resumo"]))
+        c2.metric("Linhas retornadas", len(r["resumo"]))
         st.caption("As linhas podem se sobrepor. Não devem ser somadas.")
-        st.plotly_chart(px.bar(r["resumo"].head(12).sort_values("valor"), x="valor", y="conta", orientation="h", title="Maiores categorias retornadas"), use_container_width=True)
+        st.plotly_chart(px.bar(r["resumo"].head(12).sort_values("valor"), x="valor", y="conta", orientation="h", title="Maiores linhas retornadas"), use_container_width=True)
         st.dataframe(r["resumo"], use_container_width=True, hide_index=True)
         st.download_button("Baixar tabela exibida (CSV)", r["resumo"].to_csv(index=False).encode("utf-8-sig"), file_name=f"radar_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
