@@ -387,6 +387,7 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: 
                     "CNPJ do órgão": orgao.get("cnpj") or "Não informado",
                     "Unidade administrativa": unidade.get("nomeUnidade") or "Não informada",
                     "Objeto": item.get("objetoCompra") or "Descrição não informada",
+                    "Objeto resumido": resumir_objeto(item.get("objetoCompra")),
                     "Modalidade": item.get("modalidadeNome") or modalidade,
                     "Valor estimado (R$)": pd.to_numeric(item.get("valorTotalEstimado"), errors="coerce"),
                     "Data de publicação": str(item.get("dataPublicacaoPncp") or "")[:10],
@@ -436,6 +437,29 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: 
         return pd.DataFrame(), "Nenhum registro correspondeu ao escopo na amostra consultada; isso não significa ausência de contratações. " + descricao, diagnostico_df
     resultado = pd.DataFrame(linhas)
     return resultado.drop_duplicates(subset=["Identificador PNCP"]), descricao, diagnostico_df
+
+
+def resumir_objeto(texto: object, limite: int = 160) -> str:
+    """Remove textos padrao sem criar informações ausentes do objeto oficial."""
+    import re
+    import unicodedata
+    original = " ".join(str(texto or "").split())
+    if not original or original == "Descrição não informada":
+        return "Objeto não informado"
+    original = re.sub(r"^\\[Portal de Compras Públicas\\]\\s*[-–:]?\\s*", "", original, flags=re.I)
+    original = re.sub(r"^o objeto da presente licita[çc][ãa]o [ée]\\s+", "", original, flags=re.I)
+    original = re.sub(
+        r"^(?:a escolha mais vantajosa para|a sele[çc][ãa]o da proposta mais vantajosa para)\\s+",
+        "", original, flags=re.I,
+    )
+    original = re.sub(r"^(?:o|a)\\s+(?=(?:contrata[çc][ãa]o|aquisi[çc][ãa]o))", "", original, flags=re.I)
+    original = original.lstrip(" -:;,.")
+    if not original:
+        return "Consulte o objeto original no PNCP"
+    if len(original) <= limite:
+        return original[0].upper() + original[1:]
+    trecho = original[:limite].rsplit(" ", 1)[0]
+    return (trecho or original[:limite]).rstrip(" ,;:") + "…"
 
 
 def moeda(valor: float) -> str:
@@ -597,12 +621,12 @@ def criar_pdf(
             "Exemplos abaixo, sem representar a totalidade das compras.", corpo,
         ))
         linhas = [[par("Unidade / órgão", cabecalho),
-                   par("Objeto publicado", cabecalho),
+                   par("Objeto em linguagem direta*", cabecalho),
                    par("Valor estimado", cabecalho)]]
         limite = 2 if demonstracao else 12
         for _, linha in pncp.head(limite).iterrows():
             unidade = str(linha.get("Unidade administrativa") or linha.get("Órgão") or "Não informada")
-            objeto = str(linha.get("Objeto") or "Não informado")
+            objeto = str(linha.get("Objeto resumido") or resumir_objeto(linha.get("Objeto"), 160))
             valor = linha.get("Valor estimado (R$)")
             valor_texto = moeda(float(valor)) if pd.notna(valor) else "Não informado"
             linhas.append([
@@ -611,6 +635,7 @@ def criar_pdf(
                 par(valor_texto),
             ])
         story.append(tabela(linhas, [53*mm, 79*mm, 40*mm]))
+        story.append(Paragraph("*Resumo automático do texto publicado; consulte o objeto integral pelo identificador PNCP.", pequeno))
         if not demonstracao:
             story.append(Spacer(1, 7))
             story.append(Paragraph("Leitura orientada das contratações", estilos["Heading3"]))
@@ -751,6 +776,7 @@ with tab1:
 with tab2:
     st.subheader(f"Contratações no PNCP — {escopo_pncp}")
     st.info(r["nota_pncp"])
+    st.caption("Objeto resumido remove apenas fórmulas repetitivas do texto do edital; consulte a coluna Objeto para a redação integral.")
     st.caption("Classificação dos órgãos refeita na versão v5. A coluna Unidade administrativa permite conferir secretarias e fundos separadamente.")
     if not r["pncp"].empty:
         st.dataframe(r["pncp"], width="stretch", hide_index=True)
