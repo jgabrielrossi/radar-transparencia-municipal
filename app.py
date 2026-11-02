@@ -839,6 +839,7 @@ def criar_pdf(
     nota_peer: str = "",
 ) -> bytes:
     """PDF informativo: funções orçamentárias separadas de contratações PNCP."""
+    nome_municipio_base = nome
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=A4, rightMargin=17*mm, leftMargin=17*mm,
@@ -1148,7 +1149,7 @@ def criar_pdf(
             # Total oficial é injetado no gerador a partir da fonte original.
             if total_origem > 0:
                 story.append(Paragraph(
-                    f"Comparação: {html.escape(nome)} ({html.escape(uf)}) e "
+                    f"Comparação: {html.escape(nome_municipio_base)} ({html.escape(uf)}) e "
                     f"{html.escape(peer['nome'])} ({html.escape(peer['uf'])}). "
                     "População IBGE estimada em 2024, usada como base "
                     f"de porte: {pop_origem:,} e {pop_peer:,} habitantes.".replace(",", "."),
@@ -1156,7 +1157,7 @@ def criar_pdf(
                 ))
                 linhas_pares = [
                     [par("Indicador", cabecalho),
-                     par(f"{nome} / {uf}", cabecalho),
+                     par(f"{nome_municipio_base} / {uf}", cabecalho),
                      par(f"{peer['nome']} / {peer['uf']}", cabecalho)]
                 ]
                 linhas_pares.append([
@@ -1477,6 +1478,13 @@ with tab3:
                              [r["municipio"]["id"]] + [m["id"] for m in candidatos]
                              if x in populacoes)),
             )
+        # Não misturar RREO comum e simplificado na comparação sem auditoria.
+        if par is not None:
+            atual_simplificado_par = "RREO Simplificado" in r["nota"]
+            par_simplificado = "RREO Simplificado" in nota_par
+            if atual_simplificado_par != par_simplificado:
+                nota_par += " Comparação omitida: tipos de RREO diferentes entre municípios."
+                par, resumo_par, total_par = None, pd.DataFrame(), None
         # O denominador usado no quadro do município é o total oficial (I).
         resumo_atual_pdf = r["resumo"].copy()
         resumo_atual_pdf.attrs["total_oficial_I"] = extrair_totais_rreo(r["raw"])["I"]
