@@ -72,3 +72,9 @@ Os planos gratuitos têm limites e podem mudar. Não habilite gastos pagos sem c
 3. Registro persistente de pedidos e processo de entrega.
 4. Integração de pagamento com verificação server-side, webhook autenticado, idempotência e reconciliação.
 5. IA opcional para explicar evidências já calculadas e verificadas, sem criar números ou acusar ilegalidade.
+
+## Triagem opcional de pagamentos efetivos
+
+Na área administrativa, é possível enviar um CSV exportado de um portal de transparência com as colunas `cnpj_fornecedor`, `nome_fornecedor`, `valor_pago`, `id_pagamento`. A tabela mostra frequência e participação por CNPJ e sinaliza, por padrão, 5 ou mais pagamentos ou 20% do total do arquivo. Não reutiliza estimativas de contratações do PNCP, não valida autenticidade ou completude do arquivo e não diagnostica irregularidade. A análise não é armazenada em banco de dados nem incluída automaticamente no PDF.
+
+Na comparação anual, as seis maiores funções do ano atual são preservadas mesmo quando o ano anterior não tiver valor validado; nesses casos, a variação aparece como N/D. Pode haver um destaque adicional de variação superior a 100%.
