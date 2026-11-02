@@ -144,7 +144,7 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
     return summary, None, note
 
 
-def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int) -> tuple[pd.DataFrame, str]:
+def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Somente Prefeitura") -> tuple[pd.DataFrame, str]:
     """Amostra de publicacoes do PNCP cujo orgao contratante e a prefeitura."""
     import unicodedata
 
@@ -168,6 +168,8 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int) -> tuple[pd.DataFra
     linhas = []
     sucesso = 0
     falhas = 0
+    sem_conteudo = 0
+    detalhes_erros = []
     registros_consultados = 0
     excluidos = 0
     for codigo, modalidade in modalidades.items():
@@ -179,11 +181,30 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int) -> tuple[pd.DataFra
             "pagina": 1,
             "tamanhoPagina": 20,
         }
-        data = get_json(PNCP_URL, params)
-        if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+        try:
+            resposta = requests.get(PNCP_URL, params=params, timeout=REQUEST_TIMEOUT)
+            if resposta.status_code == 204:
+                sem_conteudo += 1
+                sucesso += 1
+                continue
+            resposta.raise_for_status()
+            data = resposta.json()
+            if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+                falhas += 1
+                detalhes_erros.append(f"{modalidade}: resposta sem lista de registros")
+                continue
+            sucesso += 1
+        except requests.HTTPError as exc:
             falhas += 1
+            codigo_http = exc.response.status_code if exc.response is not None else "?"
+            detalhes_erros.append(f"{modalidade}: HTTP {codigo_http}")
+            print(f"PNCP {modalidade}: {exc}")
             continue
-        sucesso += 1
+        except (requests.RequestException, ValueError) as exc:
+            falhas += 1
+            detalhes_erros.append(f"{modalidade}: falha de conexão ou JSON inválido")
+            print(f"PNCP {modalidade}: {exc}")
+            continue
         for item in data["data"]:
             if not isinstance(item, dict):
                 continue
@@ -195,13 +216,14 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int) -> tuple[pd.DataFra
             # O municipio da unidade e o municipio do endereco, nao a entidade
             # contratante. Exigimos denominacao exata da prefeitura/municipio.
             nome_orgao = normalizar(orgao.get("razaoSocial"))
-            if nome_orgao not in nomes_prefeitura:
+            prefeitura = nome_orgao in nomes_prefeitura
+            if escopo == "Somente Prefeitura" and not prefeitura:
                 excluidos += 1
                 continue
-            if str(orgao.get("esferaId") or "M").upper() != "M":
+            if str(orgao.get("esferaId") or "").upper() != "M":
                 excluidos += 1
                 continue
-            if str(orgao.get("poderId") or "E").upper() != "E":
+            if str(orgao.get("poderId") or "").upper() != "E":
                 excluidos += 1
                 continue
             linhas.append({
@@ -214,19 +236,22 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int) -> tuple[pd.DataFra
                 "Identificador PNCP": item.get("numeroControlePNCP") or "Não informado",
             })
     detalhe = (
-        f"Amostra de 01/12 a 30/12/{ano}, pregão eletrônico e dispensa de licitação, "
+        f"Escopo: {escopo}. Amostra de 01/12 a 30/12/{ano}, pregão eletrônico e dispensa de licitação, "
         f"primeira página (até 20 registros) de cada modalidade. Foram examinados "
         f"{registros_consultados} registros e {excluidos} foram excluídos por não "
-        f"corresponderem à identificação da prefeitura. São incluídos apenas órgãos "
-        f"com denominação Município de {nome_municipio} ou Prefeitura de {nome_municipio} "
-        "(e variações de preposição), esfera municipal e poder Executivo. "
-        "Secretarias, fundos e autarquias com CNPJ/razão social próprios não são "
-        "automaticamente incluídos. O filtro é conservador e pode deixar de mostrar "
-        "contratações da prefeitura registradas com outra denominação. "
-        "A amostra não representa todas as compras da prefeitura no ano."
+        "corresponderem ao escopo selecionado. "
+        "Somente Prefeitura identifica a razão social Município/Prefeitura. "
+        "Administração Municipal Ampliada considera entidades da esfera municipal "
+        "e do poder Executivo, podendo incluir secretarias, fundos e autarquias. "
+        "O filtro geográfico usa o município da unidade administrativa; "
+        "a amostra não representa todas as contratações do ano."
     )
+    if sem_conteudo:
+        detalhe += f" {sem_conteudo} consulta(s) retornaram HTTP 204 (sem registros)."
+    if detalhes_erros:
+        detalhe += " Erros: " + "; ".join(detalhes_erros) + "."
     if not sucesso:
-        return pd.DataFrame(), "O PNCP não respondeu às consultas. " + detalhe
+        return pd.DataFrame(), "As consultas ao PNCP falharam; veja os códigos de erro. " + detalhe
     if falhas:
         detalhe = f"Atenção: {falhas} modalidade(s) falharam; amostra incompleta. " + detalhe
     if not linhas:
