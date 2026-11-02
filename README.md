@@ -10,7 +10,8 @@ Primeira versão para validar o produto sem investir em infraestrutura ou integr
 - PDFs gratuito e de entrega manual com funções orçamentárias sem somar subfunções, percentuais condicionados ao total oficial e exemplos de contratações do PNCP.
 - Versão completa de R$ 29 inclui leitura orientada: concentração das despesas nas maiores funções, diferença entre funções, unidades mais frequentes nos registros PNCP, maiores valores estimados com identificadores e alertas de dados zerados/consultas incompletas. Esses insights não caracterizam auditoria ou comprovação de pagamento.
 - Na consulta PNCP, objeto resumido remove prefácios repetitivos e mantém o objeto original acessível na tabela; no PDF os trechos são identificados como resumos automáticos.
-- Relatório completo compara funções e despesas liquidadas com o exercício anterior (mesmo sexto bimestre), calculando variações nominais quando disponíveis; não corrige inflação nem infere qualidade do gasto.
+- O relatório completo mostra seis funções comparáveis com o exercício anterior e destaca uma função adicional com variação nominal positiva acima de 100%, se existir.
+- A aba Contratações oferece consulta sob demanda a resultados registrados de até cinco itens de uma licitação PNCP, mostrando fornecedores informados, CNPJ/CPF e valores homologados quando disponíveis; isso não comprova contrato assinado nem pagamento.
 - Formulário que prepara uma solicitação para o relatório inicial de R$ 29.
 - Entrega manual: o app **não recebe nem confirma pagamentos** e não libera automaticamente produto pago.
 
