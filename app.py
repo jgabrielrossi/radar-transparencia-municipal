@@ -56,7 +56,34 @@ def get_json(url: str, params: dict[str, Any] | None = None) -> dict[str, Any] |
 @st.cache_data(ttl=86400, show_spinner="Carregando municípios do IBGE...")
 def carregar_municipios() -> list[dict[str, str]]:
     data = get_json(IBGE_URL, {"orderBy": "nome"})
-    if not isinstance(data, list):
+    if not isinstance(data, list) or not data:
+        # Fonte secundaria independente para nao bloquear a interface quando a API IBGE falhar.
+        # Snapshot comunitario de codigos IBGE: https://github.com/kelvins/municipios-brasileiros
+        backup_url = "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/json/municipios.json"
+        backup = get_json(backup_url)
+        codigos_uf = {
+            11: "RO", 12: "AC", 13: "AM", 14: "RR", 15: "PA", 16: "AP", 17: "TO",
+            21: "MA", 22: "PI", 23: "CE", 24: "RN", 25: "PB", 26: "PE", 27: "AL",
+            28: "SE", 29: "BA", 31: "MG", 32: "ES", 33: "RJ", 35: "SP",
+            41: "PR", 42: "SC", 43: "RS", 50: "MS", 51: "MT", 52: "GO", 53: "DF",
+        }
+        if isinstance(backup, list):
+            fallback = []
+            for item in backup:
+                if not isinstance(item, dict):
+                    continue
+                codigo = item.get("codigo_ibge")
+                nome = item.get("nome")
+                uf = codigos_uf.get(item.get("codigo_uf"))
+                if codigo and nome and uf:
+                    fallback.append({"id": str(codigo), "nome": str(nome), "uf": uf})
+            if fallback:
+                st.warning(
+                    "O IBGE não respondeu. Usando uma lista alternativa de municípios "
+                    "(snapshot comunitário com códigos IBGE). Nomes e divisões territoriais "
+                    "podem estar desatualizados; confirme no IBGE."
+                )
+                return sorted(fallback, key=lambda m: (m["nome"], m["uf"]))
         return []
     municipios: list[dict[str, str]] = []
     for item in data:
