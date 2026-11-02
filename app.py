@@ -461,6 +461,100 @@ def resumir_objeto(texto: object, limite: int = 160) -> str:
     return (trecho or original[:limite]).rstrip(" ,;:") + "…"
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def consultar_fornecedores_resultados(identificador: str) -> tuple[pd.DataFrame, str]:
+    """Consulta resultados registrados de ate cinco itens de uma licitacao PNCP."""
+    import re
+    import time
+
+    partes = re.fullmatch(r"(\\d{14})-(\\d+)-(\\d{4})/(\\d+)", str(identificador).strip())
+    if not partes:
+        return pd.DataFrame(), "Identificador PNCP inválido ou não reconhecido."
+    cnpj, _tipo, ano, sequencial = partes.groups()
+    base = f"https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{int(ano)}/{int(sequencial)}/itens"
+    try:
+        resposta = requests.get(
+            base, params={"pagina": 1, "tamanhoPagina": 10},
+            headers={"Accept": "application/json", "User-Agent": "RadarTransparencia/0.5"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if resposta.status_code == 204:
+            return pd.DataFrame(), "Não há itens registrados no PNCP para esta contratação."
+        resposta.raise_for_status()
+        dados = resposta.json()
+    except (requests.RequestException, ValueError) as exc:
+        return pd.DataFrame(), f"Não foi possível consultar os itens: {type(exc).__name__}."
+
+    if isinstance(dados, list):
+        itens = dados
+    elif isinstance(dados, dict):
+        itens = dados.get("data") or dados.get("items") or []
+    else:
+        itens = []
+    if not isinstance(itens, list) or not itens:
+        return pd.DataFrame(), "A API não retornou itens consultáveis para esta contratação."
+
+    registros = []
+    falhas = []
+    itens_consultados = 0
+    for item in itens[:5]:
+        if not isinstance(item, dict):
+            continue
+        numero = item.get("numeroItem")
+        if not str(numero or "").isdigit():
+            continue
+        itens_consultados += 1
+        time.sleep(0.25)
+        try:
+            res = requests.get(
+                f"{base}/{int(numero)}/resultados",
+                headers={"Accept": "application/json", "User-Agent": "RadarTransparencia/0.5"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            if res.status_code == 204:
+                continue
+            res.raise_for_status()
+            valores = res.json()
+        except (requests.RequestException, ValueError) as exc:
+            falhas.append(f"Item {numero}: {type(exc).__name__}")
+            continue
+        if isinstance(valores, dict):
+            valores = valores.get("data") or valores.get("items") or []
+        if not isinstance(valores, list):
+            continue
+        for resultado in valores:
+            if not isinstance(resultado, dict):
+                continue
+            fornecedor = resultado.get("nomeRazaoSocialFornecedor")
+            if not fornecedor:
+                continue
+            registros.append({
+                "Item": int(numero),
+                "Fornecedor informado no resultado": str(fornecedor),
+                "CPF/CNPJ informado": str(resultado.get("niFornecedor") or "Não informado"),
+                "Valor total homologado (R$)": pd.to_numeric(
+                    resultado.get("valorTotalHomologado"), errors="coerce"
+                ),
+                "Data do resultado": str(resultado.get("dataResultado") or ""),
+                "Ordem de classificação": resultado.get("ordemClassificacaoSrp") or "",
+                "Situação": str(resultado.get("situacaoCompraItemResultadoNome") or
+                                resultado.get("situacaoCompraItemResultadoId") or "Não informada"),
+            })
+    nota = (
+        f"Consultados {itens_consultados} de {len(itens)} item(ns) da primeira página, "
+        "limitados a cinco para evitar excesso de requisições. Os resultados "
+        "podem informar diferentes fornecedores por item e classificação; "
+        "não significam necessariamente contrato assinado ou pagamento efetuado."
+    )
+    if len(itens) > 5:
+        nota += " Há itens adicionais não verificados."
+    if falhas:
+        nota += " Falhas: " + "; ".join(falhas)
+    if not registros:
+        return pd.DataFrame(), "Nenhum fornecedor foi identificado nos resultados consultados. " + nota
+    return pd.DataFrame(registros).drop_duplicates(), nota
+
+
 def moeda(valor: float) -> str:
     return (f"R$ {valor:,.2f}").replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -857,6 +951,36 @@ with tab2:
         st.download_button("Baixar registros desta página (CSV)", r["pncp"].to_csv(index=False).encode("utf-8-sig"), file_name=f"pncp_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
         st.warning("A consulta não retornou registros para exibição. Não conclua que não houve contratação; verifique a pesquisa diretamente na fonte.")
+    if not r["pncp"].empty:
+        with st.expander("Consultar fornecedores informados nos resultados dos itens"):
+            st.caption(
+                "Consulta sob demanda na API oficial do PNCP. Um edital pode ter "
+                "vários vencedores por item; fornecedor do resultado não comprova "
+                "pagamento nem contrato assinado. São consultados até cinco itens."
+            )
+            identificadores = r["pncp"]["Identificador PNCP"].dropna().astype(str).unique().tolist()
+            escolhido = st.selectbox(
+                "Contratação PNCP", identificadores,
+                format_func=lambda x: x,
+                key="selecionar_resultado_pncp",
+            )
+            if st.button("Consultar fornecedores desta contratação", key="buscar_fornecedor_pncp"):
+                with st.spinner("Consultando resultados oficiais por item..."):
+                    fornecedores, nota_fornecedores = consultar_fornecedores_resultados(escolhido)
+                st.session_state["resultado_fornecedor_pncp"] = {
+                    "identificador": escolhido,
+                    "dados": fornecedores,
+                    "nota": nota_fornecedores,
+                }
+            resultado_fornecedor = st.session_state.get("resultado_fornecedor_pncp")
+            if resultado_fornecedor and resultado_fornecedor["identificador"] == escolhido:
+                st.info(resultado_fornecedor["nota"])
+                if not resultado_fornecedor["dados"].empty:
+                    st.dataframe(resultado_fornecedor["dados"], width="stretch", hide_index=True)
+                st.link_button(
+                    "Ver contratação no PNCP",
+                    "https://pncp.gov.br/app/editais/" + escolhido.replace("-1-", "/"),
+                )
     with st.expander("Diagnóstico: órgãos e unidades retornados pelo PNCP"):
         st.caption("Identificação conforme os campos enviados ao PNCP. A presença de um órgão não comprova vínculo administrativo com a prefeitura. Esta tabela é apenas para conferir filtros; não integra o PDF.")
         if not r["diagnostico_pncp"].empty:
