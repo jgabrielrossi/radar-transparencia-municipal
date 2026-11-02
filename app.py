@@ -592,10 +592,21 @@ def analisar_concentracao_pagamentos(
     )
     temp["id_pagamento"] = temp["id_pagamento"].fillna("").astype(str).str.strip()
     temp["nome_fornecedor"] = temp["nome_fornecedor"].fillna("").astype(str).str.strip()
-    temp["valor_pago"] = pd.to_numeric(
-        temp["valor_pago"].astype(str).str.replace(".", "", regex=False)
-        .str.replace(",", ".", regex=False), errors="coerce"
-    )
+    def converter_moeda(valor: object) -> float:
+        texto = str(valor or "").strip().replace("R$", "").replace(" ", "")
+        if "," in texto and "." in texto:
+            # O ultimo separador define qual e a casa decimal.
+            if texto.rfind(",") > texto.rfind("."):
+                texto = texto.replace(".", "").replace(",", ".")
+            else:
+                texto = texto.replace(",", "")
+        elif "," in texto:
+            texto = texto.replace(".", "").replace(",", ".")
+        try:
+            return float(texto)
+        except (TypeError, ValueError):
+            return float("nan")
+    temp["valor_pago"] = temp["valor_pago"].map(converter_moeda)
     validos = (
         temp["cnpj_fornecedor"].str.len().eq(14)
         & temp["id_pagamento"].ne("")
