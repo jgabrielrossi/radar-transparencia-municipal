@@ -309,7 +309,7 @@ with tab3:
         st.markdown("#### Área privada do responsável — entrega manual")
         st.warning("Use esta área somente depois de confirmar o pagamento fora do aplicativo. Confira município e exercício do pedido antes de gerar o arquivo. O app não verifica Pix nem registra pedidos pagos.")
         pdf_pago = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=False)
-        st.download_button("Gerar PDF para entrega manual", data=pdf_pago, file_name=f"raio_x_{r["municipio"]["id"]}_{r["ano"]}.pdf", mime="application/pdf", use_container_width=True)
+        st.download_button("Gerar PDF para entrega manual", data=pdf_pago, file_name=f"raio_x_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", use_container_width=True)
 
 st.divider()
 st.caption("Protótipo inicial • Sem integração de pagamento • Consulte e valide as fontes oficiais • Versão de teste, não auditada.")
