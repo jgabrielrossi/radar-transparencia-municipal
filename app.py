@@ -574,6 +574,72 @@ def consultar_fornecedores_resultados(identificador: str) -> tuple[pd.DataFrame,
     return pd.DataFrame(registros).drop_duplicates(), nota
 
 
+def analisar_concentracao_pagamentos(
+    dados: pd.DataFrame, min_pagamentos: int = 5, limite_percentual: float = 20.0,
+) -> tuple[pd.DataFrame, str]:
+    """Análise exploratória de pagamentos EFETIVOS informados em CSV externo."""
+    import re
+    obrigatorias = {"cnpj_fornecedor", "nome_fornecedor", "valor_pago", "id_pagamento"}
+    if not obrigatorias.issubset(dados.columns):
+        return pd.DataFrame(), (
+            "CSV inválido. Colunas obrigatórias: cnpj_fornecedor, nome_fornecedor, "
+            "valor_pago, id_pagamento. Um identificador único por pagamento evita "
+            "somar linhas duplicadas."
+        )
+    temp = dados[list(obrigatorias)].copy()
+    temp["cnpj_fornecedor"] = temp["cnpj_fornecedor"].fillna("").astype(str).map(
+        lambda x: "".join(re.findall(r"[0-9]", x))
+    )
+    temp["id_pagamento"] = temp["id_pagamento"].fillna("").astype(str).str.strip()
+    temp["nome_fornecedor"] = temp["nome_fornecedor"].fillna("").astype(str).str.strip()
+    temp["valor_pago"] = pd.to_numeric(
+        temp["valor_pago"].astype(str).str.replace(".", "", regex=False)
+        .str.replace(",", ".", regex=False), errors="coerce"
+    )
+    validos = (
+        temp["cnpj_fornecedor"].str.len().eq(14)
+        & temp["id_pagamento"].ne("")
+        & temp["nome_fornecedor"].ne("")
+        & temp["valor_pago"].notna()
+        & temp["valor_pago"].gt(0)
+    )
+    descartados = int((~validos).sum())
+    temp = temp[validos].copy()
+    if temp.empty:
+        return pd.DataFrame(), "Nenhum pagamento válido foi identificado no CSV."
+    ids_duplicados = int(temp.duplicated("id_pagamento").sum())
+    temp = temp.drop_duplicates("id_pagamento", keep="first")
+    total = float(temp["valor_pago"].sum())
+    agrupado = (
+        temp.groupby("cnpj_fornecedor", as_index=False)
+        .agg(
+            fornecedor=("nome_fornecedor", "first"),
+            pagamentos=("id_pagamento", "nunique"),
+            valor_total_pago=("valor_pago", "sum"),
+        )
+        .sort_values("valor_total_pago", ascending=False)
+    )
+    agrupado["participacao_percentual"] = (
+        agrupado["valor_total_pago"] / total * 100
+    ).round(2)
+    agrupado["sinalizacao"] = agrupado.apply(
+        lambda x: "Revisar concentração" if (
+            x["pagamentos"] >= min_pagamentos
+            or x["participacao_percentual"] >= limite_percentual
+        ) else "Sem gatilho", axis=1
+    )
+    nota = (
+        f"Arquivo fornecido pelo responsável: {len(temp)} pagamentos válidos; "
+        f"{descartados} linhas inválidas e {ids_duplicados} IDs duplicados removidos. "
+        f"Sinalizar >= {min_pagamentos} pagamentos para o mesmo CNPJ OU "
+        f">= {limite_percentual:.1f}% do total válido deste arquivo. "
+        "Apenas um critério de triagem, NÃO é indício automático de irregularidade. "
+        "Não comprova completude, autenticidade ou origem do CSV. "
+        "Não contempla pagamentos ausentes do arquivo, estornos ou devoluções."
+    )
+    return agrupado, nota
+
+
 def moeda(valor: float) -> str:
     return (f"R$ {valor:,.2f}").replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -1096,6 +1162,52 @@ with tab3:
             nota_anterior=nota_anterior,
         )
         st.download_button("Gerar PDF para entrega manual", data=pdf_pago, file_name=f"raio_x_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
+        st.divider()
+        st.markdown("#### Triagem de concentração de pagamentos por empresa")
+        st.caption(
+            "Opcional. Use somente um CSV exportado de pagamentos efetivamente "
+            "realizados do portal de transparência. Não use valores de licitação "
+            "ou de contrato do PNCP como se fossem pagamentos."
+        )
+        arquivo_pagamentos = st.file_uploader(
+            "CSV de pagamentos: cnpj_fornecedor, nome_fornecedor, valor_pago, id_pagamento",
+            type=["csv"], key="arquivo_pagamentos_empresa",
+        )
+        if arquivo_pagamentos is not None:
+            try:
+                dados_pagamentos = pd.read_csv(
+                    arquivo_pagamentos, sep=";", dtype=str,
+                    encoding="utf-8-sig", keep_default_na=False,
+                )
+                if len(dados_pagamentos.columns) == 1:
+                    arquivo_pagamentos.seek(0)
+                    dados_pagamentos = pd.read_csv(
+                        arquivo_pagamentos, sep=",", dtype=str,
+                        encoding="utf-8-sig", keep_default_na=False,
+                    )
+                resumo_pagamentos, nota_pagamentos = analisar_concentracao_pagamentos(
+                    dados_pagamentos,
+                )
+                st.info(nota_pagamentos)
+                if not resumo_pagamentos.empty:
+                    st.dataframe(resumo_pagamentos, width="stretch", hide_index=True)
+                    alertados = resumo_pagamentos[
+                        resumo_pagamentos["sinalizacao"] == "Revisar concentração"
+                    ]
+                    if not alertados.empty:
+                        st.warning(
+                            f"{len(alertados)} fornecedor(es) atingiram os critérios "
+                            "de triagem. Verifique os lançamentos e a documentação "
+                            "antes de qualquer conclusão."
+                        )
+                    st.download_button(
+                        "Baixar triagem em CSV",
+                        resumo_pagamentos.to_csv(index=False).encode("utf-8-sig"),
+                        file_name="triagem_pagamentos.csv", mime="text/csv",
+                    )
+            except (ValueError, UnicodeError, pd.errors.ParserError) as exc:
+                st.error(f"Não foi possível interpretar o CSV: {type(exc).__name__}.")
+
 
 st.divider()
 st.caption("Protótipo inicial • Sem integração de pagamento • Consulte e valide as fontes oficiais • Versão de teste, não auditada.")
