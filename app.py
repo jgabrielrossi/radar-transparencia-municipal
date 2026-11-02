@@ -144,9 +144,10 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
     return summary, None, note
 
 
-def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Prefeitura / Administração Direta") -> tuple[pd.DataFrame, str]:
+def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: str = "Prefeitura / Administração Direta") -> tuple[pd.DataFrame, str]:
     """Pesquisa limitada, com paginacao e filtro pelo orgao contratante."""
     import unicodedata
+    import calendar
 
     def normalizar(valor: object) -> str:
         texto = unicodedata.normalize("NFKD", str(valor or ""))
@@ -173,8 +174,8 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Pref
     for codigo, modalidade in modalidades.items():
         for pagina in range(1, max_paginas_por_modalidade + 1):
             params = {
-                "dataInicial": f"{ano}1201",
-                "dataFinal": f"{ano}1230",
+                "dataInicial": f"{ano}{mes:02d}01",
+                "dataFinal": f"{ano}{mes:02d}{calendar.monthrange(ano, mes)[1]:02d}",
                 "codigoModalidadeContratacao": codigo,
                 "codigoMunicipioIbge": ibge_id,
                 "pagina": pagina,
@@ -255,7 +256,7 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Pref
                 truncado = True
 
     descricao = (
-        f"Escopo: {escopo}. Amostra de 01/12 a 30/12/{ano}, pregão eletrônico "
+        f"Escopo: {escopo}. Amostra de {mes:02d}/{ano} (mês completo), pregão eletrônico "
         "e dispensa de licitação. "
         f"Consultadas {paginas_consultadas} páginas (até {max_paginas_por_modalidade} "
         f"por modalidade); examinados {examinados} registros e excluídos {excluidos} "
@@ -360,6 +361,7 @@ with st.sidebar:
     st.header("Consulta gratuita")
     cidade_label = st.selectbox("Município", labels, index=default_a)
     ano = st.selectbox("Exercício", [2025, 2024, 2023, 2022], index=0)
+    mes_pncp = st.selectbox("Mês das publicações no PNCP", list(range(1, 13)), index=8, format_func=lambda m: ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"][m - 1])
     escopo_pncp = st.radio(
         "Contratações incluídas",
         ["Prefeitura / Administração Direta", "Administração Municipal Ampliada"],
@@ -373,14 +375,14 @@ with st.sidebar:
     if admin_ok:
         st.success("Modo de entrega manual habilitado")
 
-key = f"dados_{opcoes[cidade_label]['id']}_{ano}_{escopo_pncp}"
+key = f"dados_{opcoes[cidade_label]['id']}_{ano}_{mes_pncp}_{escopo_pncp}"
 if consultar or key not in st.session_state:
     municipio = opcoes[cidade_label]
     with st.spinner("Consultando SICONFI e PNCP..."):
         raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
         resumo, total, nota_resumo = processar_resumo(raw)
-        pncp, nota_pncp = buscar_pncp(municipio["id"], municipio["nome"], ano, escopo_pncp)
-        st.session_state[key] = {"municipio": municipio, "ano": ano, "raw": raw, "resumo": resumo, "total": total, "nota": f"{nota_siconfi} {nota_resumo}", "pncp": pncp, "nota_pncp": nota_pncp}
+        pncp, nota_pncp = buscar_pncp(municipio["id"], municipio["nome"], ano, mes_pncp, escopo_pncp)
+        st.session_state[key] = {"municipio": municipio, "ano": ano, "raw": raw, "resumo": resumo, "total": total, "nota": f"{nota_siconfi} {nota_resumo}", "pncp": pncp, "nota_pncp": nota_pncp, "mes_pncp": mes_pncp}
 r = st.session_state[key]
 
 st.header(f"{r['municipio']['nome']} — {r['municipio']['uf']} | {r['ano']}")
