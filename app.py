@@ -120,26 +120,28 @@ def carregar_siconfi(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
 
 
 def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]:
-    required = {"coluna", "conta", "valor"}
+    import unicodedata
     if df.empty:
-        return pd.DataFrame(), None, "Nenhuma linha disponível para cálculo nesta consulta. Pode ser ausência de registros ou falha/limitação da fonte."
-    if not required.issubset(df.columns):
-        return pd.DataFrame(), None, "Os campos esperados não estão presentes; o sistema não calculou totais."
+        return pd.DataFrame(), None, "A consulta ao SICONFI não retornou linhas. Isso não significa que não existam despesas."
+    needed = {"coluna", "conta", "valor"}
+    if not needed.issubset(df.columns):
+        return pd.DataFrame(), None, "Campos recebidos da API: " + ", ".join(map(str, df.columns[:15]))
+    def norm(x):
+        return " ".join(unicodedata.normalize("NFKD", str(x)).encode("ascii", "ignore").decode("ascii").upper().split())
     work = df.copy()
-    work["coluna"] = work["coluna"].astype("string")
-    work["conta"] = work["conta"].astype("string")
-    work["valor"] = pd.to_numeric(work["valor"], errors="coerce")
-    work = work[work["coluna"].str.contains("Pagas", case=False, na=False)]
-    work = work[~work["conta"].str.contains("TOTAL|Intra-Orçamentárias", case=False, na=False)]
-    work = work.dropna(subset=["valor", "conta"])
+    headers = work["coluna"].map(norm)
+    work = work[headers.str.contains("LIQUIDAD", na=False) & headers.str.contains("ATE O BIMESTRE", na=False)].copy()
     if work.empty:
-        return pd.DataFrame(), None, "Não foram encontradas linhas compatíveis com o filtro exploratório de despesas pagas."
-    summary = work.groupby("conta", as_index=False)["valor"].sum()
-    summary = summary[summary["valor"] > 0].sort_values("valor", ascending=False)
-    total = float(summary["valor"].sum()) if not summary.empty else 0.0
-    summary["percentual"] = summary["valor"] / total * 100 if total > 0 else 0.0
-    note = "Agregação exploratória das linhas filtradas da API. Não equivale automaticamente ao total anual oficial e pode conter limitações de granularidade ou classificação."
-    return summary, total, note
+        return pd.DataFrame(), None, "Não foi localizada a coluna de despesas liquidadas até o bimestre. Colunas recebidas: " + ", ".join(map(str, df["coluna"].dropna().unique()[:8]))
+    work["valor"] = pd.to_numeric(work["valor"], errors="coerce")
+    work = work.dropna(subset=["valor", "conta"])
+    work = work[~work["conta"].astype(str).str.contains("TOTAL", case=False, na=False)]
+    if work.empty:
+        return pd.DataFrame(), None, "Não restaram linhas de despesas liquidadas para exibição."
+    summary = work[["conta", "valor"]].drop_duplicates().sort_values("valor", ascending=False)
+    summary["percentual"] = 0.0
+    note = "Despesas liquidadas até o bimestre, RREO Anexo 02. Funções e subfunções podem se sobrepor; não some as linhas nem interprete os percentuais como participação no total."
+    return summary, None, note
 
 
 def buscar_pncp(nome: str, uf: str, ano: int) -> tuple[pd.DataFrame, str]:
@@ -260,18 +262,18 @@ st.caption("Fontes: SICONFI/Tesouro Nacional e Portal Nacional de Contratações
 tab1, tab2, tab3 = st.tabs(["📊 Orçamento", "📑 Contratações", "📄 Relatório de R$ 29"])
 
 with tab1:
-    st.subheader("Resumo exploratório de despesas pagas")
+    st.subheader("Despesas liquidadas — RREO Anexo 02")
     st.info(r["nota"])
     if not r["resumo"].empty:
         c1, c2 = st.columns(2)
-        c1.metric("Soma exploratória das linhas filtradas", moeda(float(r["resumo"]["valor"].sum())))
+        c1.metric("Maior linha exibida", moeda(float(r["resumo"]["valor"].max())))
         c2.metric("Categorias retornadas", len(r["resumo"]))
-        st.caption("Este valor é uma agregação exploratória das linhas retornadas, não um total anual oficial validado.")
+        st.caption("As linhas podem se sobrepor. Não devem ser somadas.")
         st.plotly_chart(px.bar(r["resumo"].head(12).sort_values("valor"), x="valor", y="conta", orientation="h", title="Maiores categorias retornadas"), use_container_width=True)
         st.dataframe(r["resumo"], use_container_width=True, hide_index=True)
         st.download_button("Baixar tabela exibida (CSV)", r["resumo"].to_csv(index=False).encode("utf-8-sig"), file_name=f"radar_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
-        st.warning("Não foi possível calcular o resumo com segurança. Confira os parâmetros e a fonte oficial; isso não significa que o município não tenha despesas.")
+        st.warning("O resumo está indisponível. Veja o diagnóstico acima e consulte a fonte oficial.")
     st.link_button("Consultar SICONFI oficial", "https://siconfi.tesouro.gov.br/")
 
 with tab2:
