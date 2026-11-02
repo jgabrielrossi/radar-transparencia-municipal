@@ -53,50 +53,39 @@ def get_json(url: str, params: dict[str, Any] | None = None) -> dict[str, Any] |
         return None
 
 
-@st.cache_data(ttl=86400, show_spinner="Carregando municípios do IBGE...")
+@st.cache_data(ttl=86400, show_spinner="Carregando municípios...")
 def carregar_municipios() -> list[dict[str, str]]:
+    # Lista local de referencia para a interface abrir sem depender de rede.
+    # Fonte: https://github.com/kelvins/municipios-brasileiros (codigos IBGE).
+    try:
+        from pathlib import Path
+        arquivo = Path(__file__).resolve().parent / "municipios.csv"
+        if arquivo.is_file():
+            tabela = pd.read_csv(arquivo, dtype={"codigo_ibge": str, "nome": str, "uf": str})
+            tabela = tabela.dropna(subset=["codigo_ibge", "nome", "uf"])
+            municipios_locais = [
+                {"id": str(linha.codigo_ibge), "nome": str(linha.nome), "uf": str(linha.uf)}
+                for linha in tabela.itertuples(index=False)
+            ]
+            if municipios_locais:
+                return sorted(municipios_locais, key=lambda m: (m["nome"], m["uf"]))
+    except (OSError, ValueError, KeyError, UnicodeError) as exc:
+        print(f"Falha ao ler lista local de municipios: {exc}")
+
+    # Contingencia apenas se o arquivo local nao estiver presente ou for invalido.
     data = get_json(IBGE_URL, {"orderBy": "nome"})
-    if not isinstance(data, list) or not data:
-        # Fonte secundaria independente para nao bloquear a interface quando a API IBGE falhar.
-        # Snapshot comunitario de codigos IBGE: https://github.com/kelvins/municipios-brasileiros
-        backup_url = "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/json/municipios.json"
-        backup = get_json(backup_url)
-        codigos_uf = {
-            11: "RO", 12: "AC", 13: "AM", 14: "RR", 15: "PA", 16: "AP", 17: "TO",
-            21: "MA", 22: "PI", 23: "CE", 24: "RN", 25: "PB", 26: "PE", 27: "AL",
-            28: "SE", 29: "BA", 31: "MG", 32: "ES", 33: "RJ", 35: "SP",
-            41: "PR", 42: "SC", 43: "RS", 50: "MS", 51: "MT", 52: "GO", 53: "DF",
-        }
-        if isinstance(backup, list):
-            fallback = []
-            for item in backup:
-                if not isinstance(item, dict):
-                    continue
-                codigo = item.get("codigo_ibge")
-                nome = item.get("nome")
-                uf = codigos_uf.get(item.get("codigo_uf"))
-                if codigo and nome and uf:
-                    fallback.append({"id": str(codigo), "nome": str(nome), "uf": uf})
-            if fallback:
-                st.warning(
-                    "O IBGE não respondeu. Usando uma lista alternativa de municípios "
-                    "(snapshot comunitário com códigos IBGE). Nomes e divisões territoriais "
-                    "podem estar desatualizados; confirme no IBGE."
-                )
-                return sorted(fallback, key=lambda m: (m["nome"], m["uf"]))
+    if not isinstance(data, list):
         return []
     municipios: list[dict[str, str]] = []
     for item in data:
         if not isinstance(item, dict) or not item.get("id") or not item.get("nome"):
             continue
         uf = None
-        immediate = item.get("regiao-imediata")
-        if isinstance(immediate, dict):
-            intermediary = immediate.get("regiao-intermediaria")
-            if isinstance(intermediary, dict):
-                state = intermediary.get("UF")
-                if isinstance(state, dict):
-                    uf = state.get("sigla")
+        imediato = item.get("regiao-imediata")
+        if isinstance(imediato, dict):
+            intermediario = imediato.get("regiao-intermediaria")
+            if isinstance(intermediario, dict) and isinstance(intermediario.get("UF"), dict):
+                uf = intermediario["UF"].get("sigla")
         if not uf:
             micro = item.get("microrregiao")
             if isinstance(micro, dict):
