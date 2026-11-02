@@ -210,9 +210,10 @@ def extrair_totais_rreo(df: pd.DataFrame) -> dict[str, float | None]:
     for chave, prefixo in labels.items():
         linhas = dados[dados["_conta_norm"].str.startswith(prefixo, na=False)]
         if chave == "III":
+            nome_compacto = linhas["_conta_norm"].str.replace(" ", "", regex=False)
             linhas = linhas[
-                linhas["_conta_norm"].str.contains("III", na=False)
-                & linhas["_conta_norm"].str.contains("I + II", regex=False, na=False)
+                nome_compacto.str.contains("(III)", regex=False, na=False)
+                & nome_compacto.str.contains("(I+II)", regex=False, na=False)
             ]
         else:
             linhas = linhas[
