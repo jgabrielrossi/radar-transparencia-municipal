@@ -389,54 +389,148 @@ def moeda(valor: float) -> str:
     return (f"R$ {valor:,.2f}").replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def criar_pdf(nome: str, uf: str, ano: int, resumo: pd.DataFrame, nota: str, pncp: pd.DataFrame | None = None, demonstracao: bool = True) -> bytes:
+def criar_pdf(
+    nome: str, uf: str, ano: int, resumo: pd.DataFrame, nota: str,
+    pncp: pd.DataFrame | None = None, demonstracao: bool = True,
+    contexto_pncp: str = "",
+) -> bytes:
+    """PDF informativo: funções orçamentárias separadas de contratações PNCP."""
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=18*mm, leftMargin=18*mm, topMargin=16*mm, bottomMargin=16*mm)
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("RadarTitle", parent=styles["Title"], fontSize=16, leading=20, textColor=colors.HexColor("#1A365D"), spaceAfter=10)
-    body = ParagraphStyle("RadarBody", parent=styles["BodyText"], fontSize=8.5, leading=12, spaceAfter=7, wordWrap="CJK")
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, rightMargin=17*mm, leftMargin=17*mm,
+        topMargin=16*mm, bottomMargin=16*mm,
+    )
+    estilos = getSampleStyleSheet()
+    titulo = ParagraphStyle(
+        "RadarTitulo", parent=estilos["Title"], fontSize=15, leading=19,
+        textColor=colors.HexColor("#183153"), spaceAfter=10,
+    )
+    corpo = ParagraphStyle(
+        "RadarCorpo", parent=estilos["BodyText"], fontSize=8.5,
+        leading=12.5, spaceAfter=7, wordWrap="CJK",
+    )
+    pequeno = ParagraphStyle(
+        "RadarPequeno", parent=corpo, fontSize=7.5, leading=10.5,
+    )
+    cabecalho = ParagraphStyle(
+        "RadarCabecalho", parent=pequeno, textColor=colors.white,
+        fontName="Helvetica-Bold",
+    )
+    celula = ParagraphStyle("RadarCelula", parent=pequeno, leading=10)
+
+    def par(texto: object, estilo=celula):
+        return Paragraph(html.escape(str(texto)), estilo)
+
+    def tabela(linhas: list[list[object]], larguras: list[float]):
+        t = Table(linhas, colWidths=larguras, repeatRows=1, hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#22476E")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("GRID", (0, 0), (-1, -1), .3, colors.HexColor("#CFD8E3")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F6FA")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        return t
+
     story = []
     if demonstracao:
-        story.append(Paragraph("DEMONSTRAÇÃO GRATUITA — NÃO É LAUDO PERICIAL", ParagraphStyle("Demo", parent=styles["Heading2"], textColor=colors.red, fontSize=10)))
-    story.append(Paragraph(f"Radar da Transparência Municipal — {html.escape(nome)} ({html.escape(uf)}) — {ano}", title_style))
-    story.append(Paragraph(f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}.", body))
-    story.append(Paragraph("Este relatório organiza dados públicos disponíveis na consulta. Não comprova irregularidade, fraude, corrupção ou conformidade legal. Verifique os dados nas fontes oficiais antes de publicar conclusões.", body))
-    story.append(Spacer(1, 5))
-    if not demonstracao and not resumo.empty:
-        story.append(Paragraph("Resumo das linhas consultadas", styles["Heading2"]))
         story.append(Paragraph(
-            "Os valores são de despesas liquidadas até o bimestre no RREO Anexo 02. "
-            "As linhas de função e subfunção podem se sobrepor e não devem ser somadas.",
-            body,
+            "AMOSTRA GRATUITA — DADOS PÚBLICOS, NÃO É AUDITORIA",
+            ParagraphStyle("RadarDemo", parent=estilos["Heading3"], textColor=colors.HexColor("#A13B28")),
         ))
-    if not resumo.empty:
-        rows = [["Conta retornada pela fonte", "Valor da linha (R$)", "Percentual"]]
-        for _, row in resumo.head(5 if demonstracao else 12).iterrows():
-            rows.append([Paragraph(html.escape(str(row["conta"])), body), moeda(float(row["valor"])), "N/A"])
-        table = Table(rows, colWidths=[83*mm, 43*mm, 28*mm], repeatRows=1)
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2B6CB0")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
-            ("FONTSIZE", (0, 0), (-1, -1), 8), ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7FAFC")]),
-        ]))
-        story.append(table)
+    story.append(Paragraph(
+        f"Radar da Transparência — {html.escape(nome)} ({html.escape(uf)}) — {ano}", titulo,
+    ))
+    story.append(Paragraph(
+        f"Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M')}. "
+        "O levantamento depende das fontes oficiais e das opções selecionadas.", corpo,
+    ))
+    story.append(Paragraph(
+        "O relatório distingue DESPESAS LIQUIDADAS (SICONFI) de VALORES ESTIMADOS "
+        "DE CONTRATAÇÕES (PNCP). Uma contratação não comprova pagamento, "
+        "e as duas fontes não devem ter seus valores somados.", corpo,
+    ))
+    story.append(Spacer(1, 5))
+    story.append(Paragraph("1. Despesas por área orçamentária — SICONFI", estilos["Heading2"]))
+    story.append(Paragraph(
+        "RREO, Anexo 02, sexto bimestre. São mostradas exclusivamente "
+        "funções orçamentárias (por exemplo, Saúde e Educação), sem subfunções "
+        "sobrepostas. Isso indica a área da despesa liquidada, não o fornecedor "
+        "nem a compra individual.", corpo,
+    ))
+    if resumo.empty:
+        story.append(Paragraph(
+            "Não houve dados seguros suficientes para um quadro por função.", corpo,
+        ))
     else:
-        story.append(Paragraph("Resumo financeiro não disponível para os parâmetros consultados. O relatório não inventa nem estima valores ausentes.", body))
-    story.extend([Spacer(1, 8), Paragraph("Limitações e interpretação", styles["Heading2"]), Paragraph(html.escape(nota), body)])
-    if pncp is not None:
-        story.append(Paragraph("Contratações públicas — PNCP", styles["Heading2"]))
-        story.append(Paragraph(f"A consulta amostral do PNCP retornou {len(pncp)} registro(s) no escopo selecionado. As modalidades, o período e a paginação limitam a cobertura; não é lista anual completa.", body))
-        if not demonstracao and not pncp.empty:
-            rows = [["Órgão", "Objeto", "Valor estimado (R$)"]]
-            for _, row in pncp.head(8).iterrows():
-                value = row.get("Valor estimado (R$)")
-                value_text = moeda(float(value)) if pd.notna(value) else "Não informado"
-                rows.append([Paragraph(html.escape(str(row["Órgão"])[:90]), body), Paragraph(html.escape(str(row["Objeto"])[:160]), body), value_text])
-            table = Table(rows, colWidths=[45*mm, 75*mm, 34*mm], repeatRows=1)
-            table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2B6CB0")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey), ("FONTSIZE", (0, 0), (-1, -1), 7), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-            story.append(table)
-    story.extend([Spacer(1, 10), Paragraph("Fontes e metodologia", styles["Heading2"]), Paragraph("Fontes utilizadas conforme disponibilidade: API de localidades do IBGE, SICONFI/Tesouro Nacional e PNCP. O SICONFI foi consultado com os parâmetros apresentados no aplicativo; o PNCP consulta o período selecionado (mês, trimestre ou ano) e até 8 páginas por modalidade, com filtragem por órgão; mesmo para ano completo, pode haver registros não retornados por limitações de paginação e modalidades. As linhas do Anexo 02 podem refletir funções e subfunções sobrepostas e não devem ser somadas.", body), Paragraph("Links: https://servicodados.ibge.gov.br/ ; https://siconfi.tesouro.gov.br/ ; https://pncp.gov.br/", body)])
+        linhas = [[par("Função / área", cabecalho),
+                   par("Liquidado até o bimestre", cabecalho),
+                   par("% do total (I)", cabecalho)]]
+        limite = 5 if demonstracao else 28
+        for _, linha in resumo.head(limite).iterrows():
+            pct = linha.get("percentual")
+            texto_pct = f"{float(pct):.1f}%" if pd.notna(pct) else "Não disponível"
+            linhas.append([par(linha["conta"]), par(moeda(float(linha["valor"]))), par(texto_pct)])
+        story.append(tabela(linhas, [74*mm, 60*mm, 38*mm]))
+        if demonstracao and len(resumo) > limite:
+            story.append(Paragraph(
+                f"Amostra com {limite} de {len(resumo)} funções identificadas. "
+                "O relatório completo apresenta as demais linhas válidas.", pequeno,
+            ))
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("2. Contratações publicadas — PNCP", estilos["Heading2"]))
+    story.append(Paragraph(
+        "O PNCP apresenta o OBJETO da contratação e o VALOR TOTAL ESTIMADO, "
+        "que não correspondem necessariamente às despesas já pagas ou liquidadas. "
+        "A consulta é limitada às modalidades, filtros e páginas indicados.", corpo,
+    ))
+    if contexto_pncp:
+        story.append(Paragraph(html.escape(contexto_pncp), pequeno))
+    if pncp is None or pncp.empty:
+        story.append(Paragraph(
+            "Não há contratações disponíveis na amostra consultada. Isso não "
+            "comprova inexistência de contratações.", corpo,
+        ))
+    else:
+        story.append(Paragraph(
+            f"{len(pncp)} registros retornados na amostra selecionada. "
+            "Exemplos abaixo, sem representar a totalidade das compras.", corpo,
+        ))
+        linhas = [[par("Unidade / órgão", cabecalho),
+                   par("Objeto publicado", cabecalho),
+                   par("Valor estimado", cabecalho)]]
+        limite = 2 if demonstracao else 12
+        for _, linha in pncp.head(limite).iterrows():
+            unidade = str(linha.get("Unidade administrativa") or linha.get("Órgão") or "Não informada")
+            objeto = str(linha.get("Objeto") or "Não informado")
+            valor = linha.get("Valor estimado (R$)")
+            valor_texto = moeda(float(valor)) if pd.notna(valor) else "Não informado"
+            linhas.append([
+                par(unidade[:90]),
+                par(objeto[:180] + ("…" if len(objeto) > 180 else "")),
+                par(valor_texto),
+            ])
+        story.append(tabela(linhas, [53*mm, 79*mm, 40*mm]))
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("3. Critérios, fontes e limitações", estilos["Heading2"]))
+    story.append(Paragraph(html.escape(nota), pequeno))
+    story.append(Paragraph(
+        "Fonte financeira: SICONFI/Tesouro Nacional, RREO Anexo 02, despesas "
+        "liquidadas acumuladas até o 6º bimestre. A participação percentual "
+        "é calculada exclusivamente sobre o total oficial (I), quando disponível. "
+        "Não são somadas funções com subfunções. A origem do gasto não equivale "
+        "à identificação do destinatário do pagamento.", pequeno,
+    ))
+    story.append(Paragraph(
+        "Fontes: https://siconfi.tesouro.gov.br/ e https://pncp.gov.br/ . "
+        "Documentação informativa e exploratória; não é prova de irregularidade, "
+        "fraude, ilegalidade ou conformidade legal.", pequeno,
+    ))
     doc.build(story)
     return buffer.getvalue()
 
@@ -522,9 +616,9 @@ with tab3:
     st.subheader("Raio-X municipal — relatório inicial")
     st.metric("Preço de lançamento", moeda(PRECO_RAIO_X))
     st.markdown("**O que o relatório inclui**")
-    st.markdown("- Resumo dos dados retornados para o município e exercício escolhidos.\n- Tabela e gráfico das categorias retornadas, quando os dados permitem.\n- Amostra das contratações identificadas como da prefeitura no PNCP, quando disponível.\n- Fontes, parâmetros de consulta, metodologia e limitações.\n- Arquivo PDF preparado para leitura e compartilhamento.")
+    st.markdown("- Despesas liquidadas por função orçamentária, sem dupla contagem entre funções e subfunções.\n- Percentuais sobre o total oficial de referência, quando disponível.\n- Amostra de objetos de contratações e valores estimados, separados das despesas do SICONFI.\n- Fontes, metodologia, escopo e limitações da consulta.\n- Arquivo PDF para leitura e compartilhamento.")
     st.warning("O relatório é informativo e exploratório. Não é auditoria, parecer jurídico ou contábil, nem prova de irregularidade. Os resultados dependem da disponibilidade e da validação das fontes.")
-    demo_pdf = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=True)
+    demo_pdf = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=True, contexto_pncp=r["nota_pncp"])
     st.download_button("Baixar demonstração gratuita em PDF", data=demo_pdf, file_name=f"demonstracao_radar_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
     st.divider()
     st.markdown("#### Solicitar o relatório completo por R$ 29")
@@ -558,7 +652,7 @@ with tab3:
         st.divider()
         st.markdown("#### Área privada do responsável — entrega manual")
         st.warning("Use esta área somente depois de confirmar o pagamento fora do aplicativo. Confira município e exercício do pedido antes de gerar o arquivo. O app não verifica Pix nem registra pedidos pagos.")
-        pdf_pago = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=False)
+        pdf_pago = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=False, contexto_pncp=r["nota_pncp"])
         st.download_button("Gerar PDF para entrega manual", data=pdf_pago, file_name=f"raio_x_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
 
 st.divider()
