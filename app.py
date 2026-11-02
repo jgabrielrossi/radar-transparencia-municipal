@@ -97,49 +97,78 @@ def carregar_municipios() -> list[dict[str, str]]:
     return municipios
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def carregar_siconfi(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
-    params = {
+    """Consulta RREO comum e, se vazio, RREO Simplificado do mesmo período."""
+    import time
+
+    base = {
         "an_exercicio": ano,
         "nr_periodo": 6,
-        "co_tipo_demonstrativo": "RREO",
         "no_anexo": "RREO-Anexo 02",
         "id_ente": ibge_id,
     }
-    # ORDS costuma paginar os registros. Nunca tratar a primeira página
-    # como demonstrativo completo.
-    todas = []
-    limite = 1000
-    max_paginas = 20
-    completo = False
-    for pagina in range(max_paginas):
-        data = get_json(SICONFI_URL, {**params, "limit": limite, "offset": pagina * limite})
-        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
-            return pd.DataFrame(), (
-                "Falha ou formato inesperado durante a leitura paginada do SICONFI. "
-                "Nenhum resumo foi calculado para não usar um conjunto incompleto."
+    limite = 5000
+    max_paginas = 10
+    total_chamadas = 0
+    for demonstrativo in ("RREO", "RREO Simplificado"):
+        todos = []
+        completo = False
+        for pagina in range(max_paginas):
+            # API STN limita a uma requisicao por segundo.
+            if total_chamadas:
+                time.sleep(1.1)
+            total_chamadas += 1
+            data = get_json(
+                SICONFI_URL,
+                {
+                    **base,
+                    "co_tipo_demonstrativo": demonstrativo,
+                    "limit": limite,
+                    "offset": pagina * limite,
+                },
             )
-        itens = data["items"]
-        todas.extend(itens)
-        if not data.get("hasMore", False):
-            completo = True
-            break
-        if not itens:
-            break
-    if not completo:
-        return pd.DataFrame(), (
-            "O demonstrativo excedeu o limite de páginas ou retornou paginação "
-            "inconsistente. Não foi usado para evitar dados parciais."
+            if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+                return pd.DataFrame(), (
+                    f"Falha de consulta no SICONFI ({demonstrativo}). "
+                    "Não é possível confirmar disponibilidade; nenhum número foi estimado."
+                )
+            itens = data["items"]
+            todos.extend(itens)
+            if not data.get("hasMore", False):
+                completo = True
+                break
+            if not itens:
+                break
+        if not completo:
+            return pd.DataFrame(), (
+                f"Paginação incompleta no SICONFI ({demonstrativo}); "
+                "nenhum resumo calculado com registros parciais."
+            )
+        if not todos:
+            continue
+        frame = pd.DataFrame(todos)
+        if not {"coluna", "conta", "valor"}.issubset(frame.columns):
+            return pd.DataFrame(), (
+                f"O demonstrativo {demonstrativo} não retornou os campos "
+                "necessários para calcular as despesas."
+            )
+        return frame, (
+            f"Fonte: SICONFI — {demonstrativo}, RREO Anexo 02, "
+            f"exercício {ano}, 6º bimestre; {len(frame)} linhas recebidas. "
+            + (
+                "A consulta padrão veio vazia; foi utilizada a modalidade "
+                "simplificada para o mesmo exercício e período. "
+                if demonstrativo == "RREO Simplificado" else ""
+            )
+            + "Valores declarados no demonstrativo, sujeitos à validação na fonte."
         )
-    frame = pd.DataFrame(todas)
-    if frame.empty:
-        return frame, (f"Sem registros na API para RREO Anexo 02, exercício {ano}, 6º bimestre. " "Isso não comprova ausência de despesas ou falta de prestação de contas. " "Municípios menores podem ter regras diferenciadas de apresentação; " "confira o Extrato de Entregas e os relatórios no SICONFI oficial.")
-    required = {"coluna", "conta", "valor"}
-    if not required.issubset(frame.columns):
-        return frame, "O SICONFI não retornou todos os campos necessários ao resumo."
-    return frame, (
-        f"SICONFI: RREO Anexo 02, exercício {ano}, 6º bimestre. "
-        f"{len(frame)} linhas recebidas em {pagina + 1} página(s). "
-        "Valores acumulados de despesas liquidadas até o bimestre."
+
+    return pd.DataFrame(), (
+        f"O SICONFI não retornou dados do Anexo 02 de {ano}, 6º bimestre, "
+        "nem para RREO comum nem para RREO Simplificado. "
+        "Isso não comprova ausência de despesas ou omissão na prestação de contas. "
+        "Consulte o Extrato de Entregas e os relatórios homologados no SICONFI."
     )
 
 
@@ -687,7 +716,7 @@ with st.sidebar:
     if admin_ok:
         st.success("Modo de entrega manual habilitado")
 
-key = f"finance_v7_dados_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
+key = f"finance_v8_dados_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
 if consultar or key not in st.session_state:
     municipio = opcoes[cidade_label]
     with st.spinner("Consultando SICONFI e PNCP..."):
