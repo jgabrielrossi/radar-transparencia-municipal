@@ -144,119 +144,149 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
     return summary, None, note
 
 
-def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Somente Prefeitura") -> tuple[pd.DataFrame, str]:
-    """Amostra de contratações da prefeitura ou do Executivo municipal."""
+def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, escopo: str = "Prefeitura / Administração Direta") -> tuple[pd.DataFrame, str]:
+    """Pesquisa limitada, com paginacao e filtro pelo orgao contratante."""
     import unicodedata
 
     def normalizar(valor: object) -> str:
-        sem_acentos = unicodedata.normalize("NFKD", str(valor or ""))
-        return " ".join(sem_acentos.encode("ascii", "ignore").decode("ascii").upper().split())
+        texto = unicodedata.normalize("NFKD", str(valor or ""))
+        return " ".join(texto.encode("ascii", "ignore").decode("ascii").upper().split())
 
     municipio_normalizado = normalizar(nome_municipio)
     nomes_prefeitura = {
-        f"MUNICIPIO DE {municipio_normalizado}",
-        f"MUNICIPIO DO {municipio_normalizado}",
-        f"MUNICIPIO DA {municipio_normalizado}",
-        f"PREFEITURA MUNICIPAL DE {municipio_normalizado}",
-        f"PREFEITURA MUNICIPAL DO {municipio_normalizado}",
-        f"PREFEITURA MUNICIPAL DA {municipio_normalizado}",
-        f"PREFEITURA DE {municipio_normalizado}",
-        f"PREFEITURA DO {municipio_normalizado}",
-        f"PREFEITURA DA {municipio_normalizado}",
+        f"{prefixo} {prep} {municipio_normalizado}"
+        for prefixo in ("MUNICIPIO", "PREFEITURA", "PREFEITURA MUNICIPAL")
+        for prep in ("DE", "DO", "DA")
     }
+    ampliada = escopo == "Administração Municipal Ampliada"
     modalidades = {6: "Pregão eletrônico", 8: "Dispensa de licitação"}
+    max_paginas_por_modalidade = 8
+    por_pagina = 50
     linhas = []
-    sucesso = 0
-    falhas = 0
-    sem_conteudo = 0
-    detalhes_erros = []
-    registros_consultados = 0
+    examinados = 0
     excluidos = 0
+    consultas_validas = 0
+    paginas_consultadas = 0
+    falhas = []
+    truncado = False
+
     for codigo, modalidade in modalidades.items():
-        params = {
-            "dataInicial": f"{ano}1201",
-            "dataFinal": f"{ano}1230",
-            "codigoModalidadeContratacao": codigo,
-            "codigoMunicipioIbge": ibge_id,
-            "pagina": 1,
-            "tamanhoPagina": 20,
-        }
-        try:
-            resposta = requests.get(PNCP_URL, params=params, timeout=REQUEST_TIMEOUT)
-            if resposta.status_code == 204:
-                sem_conteudo += 1
-                sucesso += 1
-                continue
-            resposta.raise_for_status()
-            data = resposta.json()
-            if not isinstance(data, dict) or not isinstance(data.get("data"), list):
-                falhas += 1
-                detalhes_erros.append(f"{modalidade}: resposta sem lista de registros")
-                continue
-            sucesso += 1
-        except requests.HTTPError as exc:
-            falhas += 1
-            codigo_http = exc.response.status_code if exc.response is not None else "?"
-            detalhes_erros.append(f"{modalidade}: HTTP {codigo_http}")
-            print(f"PNCP {modalidade}: {exc}")
-            continue
-        except (requests.RequestException, ValueError) as exc:
-            falhas += 1
-            detalhes_erros.append(f"{modalidade}: falha de conexão ou JSON inválido")
-            print(f"PNCP {modalidade}: {exc}")
-            continue
-        for item in data["data"]:
-            if not isinstance(item, dict):
-                continue
-            registros_consultados += 1
-            orgao = item.get("orgaoEntidade") or {}
-            if not isinstance(orgao, dict):
-                excluidos += 1
-                continue
-            # O municipio da unidade e o municipio do endereco, nao a entidade
-            # contratante. O escopo prefeitura exige a denominacao da entidade.
-            nome_orgao = normalizar(orgao.get("razaoSocial"))
-            prefeitura = nome_orgao in nomes_prefeitura
-            if escopo == "Somente Prefeitura" and not prefeitura:
-                excluidos += 1
-                continue
-            if str(orgao.get("esferaId") or "").upper() != "M":
-                excluidos += 1
-                continue
-            if str(orgao.get("poderId") or "").upper() != "E":
-                excluidos += 1
-                continue
-            linhas.append({
-                "Órgão": orgao.get("razaoSocial") or "Não informado",
-                "CNPJ do órgão": orgao.get("cnpj") or "Não informado",
-                "Objeto": item.get("objetoCompra") or "Descrição não informada",
-                "Modalidade": item.get("modalidadeNome") or modalidade,
-                "Valor estimado (R$)": pd.to_numeric(item.get("valorTotalEstimado"), errors="coerce"),
-                "Data de publicação": str(item.get("dataPublicacaoPncp") or "")[:10],
-                "Identificador PNCP": item.get("numeroControlePNCP") or "Não informado",
-            })
-    detalhe = (
-        f"Escopo: {escopo}. Amostra de 01/12 a 30/12/{ano}, pregão eletrônico e dispensa de licitação, "
-        f"primeira página (até 20 registros) de cada modalidade. Foram examinados "
-        f"{registros_consultados} registros e {excluidos} foram excluídos por não "
-        "corresponderem ao escopo selecionado. "
-        "Somente Prefeitura identifica a razão social Município/Prefeitura. "
-        "Administração Municipal Ampliada considera entidades da esfera municipal "
-        "e do poder Executivo, podendo incluir secretarias, fundos e autarquias. "
-        "O filtro geográfico usa o município da unidade administrativa; "
-        "a amostra não representa todas as contratações do ano."
+        for pagina in range(1, max_paginas_por_modalidade + 1):
+            params = {
+                "dataInicial": f"{ano}1201",
+                "dataFinal": f"{ano}1230",
+                "codigoModalidadeContratacao": codigo,
+                "codigoMunicipioIbge": ibge_id,
+                "pagina": pagina,
+                "tamanhoPagina": por_pagina,
+            }
+            try:
+                resposta = requests.get(
+                    PNCP_URL, params=params, timeout=REQUEST_TIMEOUT,
+                    headers={"Accept": "application/json", "User-Agent": "RadarTransparencia/0.4"},
+                )
+                if resposta.status_code == 204:
+                    consultas_validas += 1
+                    paginas_consultadas += 1
+                    break
+                resposta.raise_for_status()
+                dados = resposta.json()
+                if not isinstance(dados, dict) or not isinstance(dados.get("data"), list):
+                    falhas.append(f"{modalidade}, página {pagina}: formato inesperado")
+                    break
+            except requests.HTTPError as exc:
+                http = exc.response.status_code if exc.response is not None else "?"
+                falhas.append(f"{modalidade}, página {pagina}: HTTP {http}")
+                print(f"Falha PNCP: {modalidade}, pagina {pagina}: {exc}")
+                break
+            except (requests.RequestException, ValueError) as exc:
+                falhas.append(f"{modalidade}, página {pagina}: conexão ou JSON inválido")
+                print(f"Falha PNCP: {modalidade}, pagina {pagina}: {exc}")
+                break
+
+            consultas_validas += 1
+            paginas_consultadas += 1
+            itens = dados["data"]
+            for item in itens:
+                if not isinstance(item, dict):
+                    continue
+                examinados += 1
+                orgao = item.get("orgaoEntidade") or {}
+                if not isinstance(orgao, dict):
+                    excluidos += 1
+                    continue
+                razao = normalizar(orgao.get("razaoSocial") or orgao.get("nome"))
+                esfera = normalizar(orgao.get("esferaId") or item.get("esferaId"))
+                poder = normalizar(orgao.get("poderId") or item.get("poderId"))
+                # Quando presentes, os dados oficiais de esfera e poder devem coincidir.
+                if (esfera and esfera != "M") or (poder and poder != "E"):
+                    excluidos += 1
+                    continue
+                prefeitura = razao in nomes_prefeitura
+                secretaria = (
+                    razao.startswith("SECRETARIA MUNICIPAL ")
+                    or razao.startswith("SECRETARIA DE ") and municipio_normalizado in razao
+                )
+                if ampliada:
+                    # Sem esfera municipal expressa, somente razoes sociais da
+                    # administracao direta permitem classificacao com cautela.
+                    aceito = (esfera == "M" and poder in ("", "E")) or prefeitura or secretaria
+                else:
+                    aceito = prefeitura or secretaria
+                if not aceito:
+                    excluidos += 1
+                    continue
+                linhas.append({
+                    "Órgão": orgao.get("razaoSocial") or orgao.get("nome") or "Não informado",
+                    "CNPJ do órgão": orgao.get("cnpj") or "Não informado",
+                    "Objeto": item.get("objetoCompra") or "Descrição não informada",
+                    "Modalidade": item.get("modalidadeNome") or modalidade,
+                    "Valor estimado (R$)": pd.to_numeric(item.get("valorTotalEstimado"), errors="coerce"),
+                    "Data de publicação": str(item.get("dataPublicacaoPncp") or "")[:10],
+                    "Identificador PNCP": item.get("numeroControlePNCP") or "Não informado",
+                })
+
+            total_paginas = dados.get("totalPaginas")
+            if isinstance(total_paginas, int) and pagina >= total_paginas:
+                break
+            if len(itens) == 0 or (total_paginas is None and len(itens) < por_pagina):
+                break
+            if pagina == max_paginas_por_modalidade:
+                truncado = True
+
+    descricao = (
+        f"Escopo: {escopo}. Amostra de 01/12 a 30/12/{ano}, pregão eletrônico "
+        "e dispensa de licitação. "
+        f"Consultadas {paginas_consultadas} páginas (até {max_paginas_por_modalidade} "
+        f"por modalidade); examinados {examinados} registros e excluídos {excluidos} "
+        "pelo filtro de entidade. "
+        "A pesquisa é limitada por período, modalidade e paginação; não é "
+        "levantamento anual ou de todas as contratações. "
     )
-    if sem_conteudo:
-        detalhe += f" {sem_conteudo} consulta(s) retornaram HTTP 204 (sem registros)."
-    if detalhes_erros:
-        detalhe += " Erros: " + "; ".join(detalhes_erros) + "."
-    if not sucesso:
-        return pd.DataFrame(), "As consultas ao PNCP falharam; veja os códigos de erro. " + detalhe
+    if ampliada:
+        descricao += (
+            "A opção ampliada considera órgãos municipais do Executivo e "
+            "pode incluir previdência, fundos e autarquias, exibidos com suas "
+            "razões sociais e CNPJs próprios. A classificação depende dos "
+            "dados preenchidos pelos órgãos no PNCP. "
+        )
+    else:
+        descricao += (
+            "Administração Direta considera prefeitura e secretarias "
+            "municipais identificadas pela razão social, excluindo "
+            "previdência, fundos e autarquias com identificação própria. "
+            "Pode deixar de fora secretarias identificadas com outros nomes. "
+        )
+    if truncado:
+        descricao += "Limite de paginação atingido; podem existir mais registros. "
     if falhas:
-        detalhe = f"Atenção: {falhas} modalidade(s) falharam; amostra incompleta. " + detalhe
+        descricao += "Falhas: " + "; ".join(falhas) + ". "
+    if consultas_validas == 0:
+        return pd.DataFrame(), "O PNCP não respondeu às consultas; não conclua ausência de contratos. " + descricao
     if not linhas:
-        detalhe = "Nenhum registro corresponde ao escopo selecionado nesta amostra limitada. Isso não significa ausência de contratações. " + detalhe
-    return pd.DataFrame(linhas), detalhe
+        return pd.DataFrame(), "Nenhum registro correspondeu ao escopo na amostra consultada; isso não significa ausência de contratações. " + descricao
+    resultado = pd.DataFrame(linhas)
+    return resultado.drop_duplicates(subset=["Identificador PNCP"]), descricao
 
 
 def moeda(valor: float) -> str:
@@ -332,8 +362,8 @@ with st.sidebar:
     ano = st.selectbox("Exercício", [2025, 2024, 2023, 2022], index=0)
     escopo_pncp = st.radio(
         "Contratações incluídas",
-        ["Somente Prefeitura", "Administração Municipal Ampliada"],
-        help="A opção ampliada inclui órgãos municipais do Executivo na amostra do PNCP.",
+        ["Prefeitura / Administração Direta", "Administração Municipal Ampliada"],
+        help="A primeira opção inclui prefeitura e secretarias municipais identificadas. A ampliada inclui também outras entidades do Executivo municipal, como previdência e fundos.",
     )
     consultar = st.button("Consultar dados públicos", type="primary", use_container_width=True)
     st.caption("A cobertura depende do exercício e da disponibilidade de cada fonte.")
