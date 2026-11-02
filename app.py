@@ -144,8 +144,8 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
     return summary, None, note
 
 
-def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: str = "Prefeitura / Administração Direta") -> tuple[pd.DataFrame, str]:
-    """Pesquisa limitada, com paginacao e filtro pelo orgao contratante."""
+def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: str = "Prefeitura / Administração Direta") -> tuple[pd.DataFrame, str, pd.DataFrame]:
+    """Pesquisa limitada com identificacao conservadora e diagnostico dos orgaos."""
     import unicodedata
     import calendar
 
@@ -160,10 +160,13 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
         for prep in ("DE", "DO", "DA")
     }
     ampliada = escopo == "Administração Municipal Ampliada"
+    # CNPJ confirmado na pagina oficial da Prefeitura de Mossoro.
+    cnpj_prefeitura = {"2408003": "08348971000139"}.get(str(ibge_id))
     modalidades = {6: "Pregão eletrônico", 8: "Dispensa de licitação"}
     max_paginas_por_modalidade = 8
     por_pagina = 50
     linhas = []
+    diagnostico = []
     examinados = 0
     excluidos = 0
     consultas_validas = 0
@@ -217,24 +220,38 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
                     excluidos += 1
                     continue
                 razao = normalizar(orgao.get("razaoSocial") or orgao.get("nome"))
+                unidade = item.get("unidadeOrgao") or {}
+                if not isinstance(unidade, dict):
+                    unidade = {}
+                nome_unidade = normalizar(unidade.get("nomeUnidade"))
+                cnpj = "".join(c for c in str(orgao.get("cnpj") or "") if c.isdigit())
+                cnpj_confirmado = bool(cnpj_prefeitura and cnpj == cnpj_prefeitura)
                 esfera = normalizar(orgao.get("esferaId") or item.get("esferaId"))
                 poder = normalizar(orgao.get("poderId") or item.get("poderId"))
                 # Quando presentes, os dados oficiais de esfera e poder devem coincidir.
-                if (esfera and esfera != "M") or (poder and poder != "E"):
-                    excluidos += 1
-                    continue
-                prefeitura = razao in nomes_prefeitura
+                esfera_invalida = (esfera and esfera != "M") or (poder and poder != "E")
+                prefeitura = razao in nomes_prefeitura or cnpj_confirmado
                 secretaria = (
                     razao.startswith("SECRETARIA MUNICIPAL ")
-                    or razao.startswith("SECRETARIA DE ") and municipio_normalizado in razao
+                    or (razao.startswith("SECRETARIA DE ") and municipio_normalizado in razao)
                 )
+                unidade_secretaria = nome_unidade.startswith("SECRETARIA MUNICIPAL ")
                 if ampliada:
                     # Sem esfera municipal expressa, somente razoes sociais da
                     # administracao direta permitem classificacao com cautela.
                     aceito = (esfera == "M" and poder in ("", "E")) or prefeitura or secretaria
                 else:
-                    aceito = prefeitura or secretaria
-                if not aceito:
+                    aceito = prefeitura or secretaria or (cnpj_confirmado and unidade_secretaria)
+                motivo = "Incluído" if aceito and not esfera_invalida else ("Esfera/poder incompatível" if esfera_invalida else "Identificação fora do escopo")
+                diagnostico.append({
+                    "Órgão declarado": orgao.get("razaoSocial") or orgao.get("nome") or "Não informado",
+                    "CNPJ": orgao.get("cnpj") or "Não informado",
+                    "Unidade administrativa": unidade.get("nomeUnidade") or "Não informada",
+                    "Esfera": esfera or "Não informada",
+                    "Poder": poder or "Não informado",
+                    "Situação": motivo,
+                })
+                if esfera_invalida or not aceito:
                     excluidos += 1
                     continue
                 linhas.append({
@@ -282,12 +299,13 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
         descricao += "Limite de paginação atingido; podem existir mais registros. "
     if falhas:
         descricao += "Falhas: " + "; ".join(falhas) + ". "
+    diagnostico_df = pd.DataFrame(diagnostico).drop_duplicates() if diagnostico else pd.DataFrame()
     if consultas_validas == 0:
-        return pd.DataFrame(), "O PNCP não respondeu às consultas; não conclua ausência de contratos. " + descricao
+        return pd.DataFrame(), "O PNCP não respondeu às consultas; não conclua ausência de contratos. " + descricao, diagnostico_df
     if not linhas:
-        return pd.DataFrame(), "Nenhum registro correspondeu ao escopo na amostra consultada; isso não significa ausência de contratações. " + descricao
+        return pd.DataFrame(), "Nenhum registro correspondeu ao escopo na amostra consultada; isso não significa ausência de contratações. " + descricao, diagnostico_df
     resultado = pd.DataFrame(linhas)
-    return resultado.drop_duplicates(subset=["Identificador PNCP"]), descricao
+    return resultado.drop_duplicates(subset=["Identificador PNCP"]), descricao, diagnostico_df
 
 
 def moeda(valor: float) -> str:
@@ -381,8 +399,8 @@ if consultar or key not in st.session_state:
     with st.spinner("Consultando SICONFI e PNCP..."):
         raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
         resumo, total, nota_resumo = processar_resumo(raw)
-        pncp, nota_pncp = buscar_pncp(municipio["id"], municipio["nome"], ano, mes_pncp, escopo_pncp)
-        st.session_state[key] = {"municipio": municipio, "ano": ano, "raw": raw, "resumo": resumo, "total": total, "nota": f"{nota_siconfi} {nota_resumo}", "pncp": pncp, "nota_pncp": nota_pncp, "mes_pncp": mes_pncp}
+        pncp, nota_pncp, diagnostico_pncp = buscar_pncp(municipio["id"], municipio["nome"], ano, mes_pncp, escopo_pncp)
+        st.session_state[key] = {"municipio": municipio, "ano": ano, "raw": raw, "resumo": resumo, "total": total, "nota": f"{nota_siconfi} {nota_resumo}", "pncp": pncp, "nota_pncp": nota_pncp, "mes_pncp": mes_pncp, "diagnostico_pncp": diagnostico_pncp}
 r = st.session_state[key]
 
 st.header(f"{r['municipio']['nome']} — {r['municipio']['uf']} | {r['ano']}")
@@ -412,6 +430,13 @@ with tab2:
         st.download_button("Baixar registros desta página (CSV)", r["pncp"].to_csv(index=False).encode("utf-8-sig"), file_name=f"pncp_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
         st.warning("A consulta não retornou registros para exibição. Não conclua que não houve contratação; verifique a pesquisa diretamente na fonte.")
+    with st.expander("Diagnóstico: órgãos e unidades retornados pelo PNCP"):
+        st.caption("Identificação conforme os campos enviados ao PNCP. A presença de um órgão não comprova vínculo administrativo com a prefeitura. Esta tabela é apenas para conferir filtros; não integra o PDF.")
+        if not r["diagnostico_pncp"].empty:
+            st.dataframe(r["diagnostico_pncp"], use_container_width=True, hide_index=True)
+            st.download_button("Baixar diagnóstico CSV", r["diagnostico_pncp"].to_csv(index=False).encode("utf-8-sig"), file_name="diagnostico_pncp.csv", mime="text/csv")
+        else:
+            st.write("Nenhum órgão recebido para diagnóstico.")
     st.link_button("Consultar PNCP oficial", "https://pncp.gov.br/")
 
 with tab3:
