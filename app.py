@@ -612,26 +612,46 @@ def criar_pdf(
                 [par("Função", cabecalho), par(str(ano - 1), cabecalho),
                  par(str(ano), cabecalho), par("Variação", cabecalho)]
             ]
-            for _, atual in resumo.head(10).iterrows():
+            linhas_comparaveis = []
+            for _, atual in resumo.iterrows():
                 nome = str(atual["conta"])
                 valor_anterior = anteriores.get(nome.strip().casefold())
                 if valor_anterior is None:
                     continue
                 valor_atual = float(atual["valor"])
-                variacao = (
-                    f"{(valor_atual / valor_anterior - 1) * 100:+.1f}%"
-                    if valor_anterior > 0 else "N/D"
+                variacao_pct = (
+                    (valor_atual / valor_anterior - 1) * 100
+                    if valor_anterior > 0 else None
                 )
+                linhas_comparaveis.append({
+                    "nome": nome, "anterior": valor_anterior,
+                    "atual": valor_atual, "variacao": variacao_pct,
+                })
+            seis = linhas_comparaveis[:6]
+            adicionais = [
+                item for item in linhas_comparaveis[6:]
+                if item["variacao"] is not None and item["variacao"] > 100
+            ]
+            destaque = max(adicionais, key=lambda item: item["variacao"]) if adicionais else None
+            selecionadas = seis + ([destaque] if destaque is not None else [])
+            for item in selecionadas:
+                variacao = (
+                    f"{item['variacao']:+.1f}%"
+                    if item["variacao"] is not None else "N/D"
+                )
+                nome = item["nome"] + (" (destaque >100%)" if item is destaque else "")
                 comparativos.append([
-                    par(nome), par(moeda(valor_anterior)),
-                    par(moeda(valor_atual)), par(variacao),
+                    par(nome), par(moeda(item["anterior"])),
+                    par(moeda(item["atual"])), par(variacao),
                 ])
             if len(comparativos) > 1:
                 story.append(tabela(comparativos, [57*mm, 44*mm, 44*mm, 27*mm]))
                 story.append(Paragraph(
-                    "Variações NOMINAIS (sem correção da inflação), por mesma "
-                    "função orçamentária e mesmo 6º bimestre. Mudanças não "
-                    "comprovam eficiência, irregularidades ou qualidade do serviço.",
+                    "Seis maiores funções comparáveis no ano atual, mais o "
+                    "maior crescimento acima de 100% fora desse grupo, se houver. "
+                    "Variações NOMINAIS, sem correção da inflação, no mesmo "
+                    "6º bimestre. Base pequena pode produzir variação alta. "
+                    "Mudanças não comprovam eficiência ou irregularidades.",
                     pequeno,
                 ))
             else:
