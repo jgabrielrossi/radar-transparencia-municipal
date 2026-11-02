@@ -724,7 +724,6 @@ def moeda(valor: float) -> str:
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-@st.cache_data(ttl=86400, show_spinner=False)
 def populacoes_ibge_referencia(ano_pop: int = 2024) -> dict[str, int]:
     """Estimativas populacionais IBGE; requisição ampla com tolerância maior."""
     url = (
