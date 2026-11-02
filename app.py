@@ -160,7 +160,7 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
         for prep in ("DE", "DO", "DA")
     }
     ampliada = escopo == "Administração Municipal Ampliada"
-    # CNPJ confirmado na pagina oficial da Prefeitura de Mossoro.
+    # CNPJ da prefeitura de Mossoró para identificação adicional da entidade.
     cnpj_prefeitura = {"2408003": "08348971000139"}.get(str(ibge_id))
     modalidades = {6: "Pregão eletrônico", 8: "Dispensa de licitação"}
     max_paginas_por_modalidade = 8
@@ -237,7 +237,7 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
                     razao.startswith("SECRETARIA MUNICIPAL ")
                     or (razao.startswith("SECRETARIA DE ") and municipio_normalizado in razao)
                 )
-                unidade_fundo = nome_unidade.startswith(("FUNDO MUNICIPAL ", "FUNDO DE "))
+                unidade_fundo = nome_unidade.startswith(("FUNDO MUNICIPAL ", "FUNDO DE ", "FUNDO MUNICIPAL DE "))
                 unidade_indireta = any(
                     termo in nome_unidade
                     for termo in ("PREVIDENCIA", "INSTITUTO DE PREVIDENCIA", "AUTARQUIA", "FUNDACAO MUNICIPAL")
@@ -265,6 +265,7 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
                 linhas.append({
                     "Órgão": orgao.get("razaoSocial") or orgao.get("nome") or "Não informado",
                     "CNPJ do órgão": orgao.get("cnpj") or "Não informado",
+                    "Unidade administrativa": unidade.get("nomeUnidade") or "Não informada",
                     "Objeto": item.get("objetoCompra") or "Descrição não informada",
                     "Modalidade": item.get("modalidadeNome") or modalidade,
                     "Valor estimado (R$)": pd.to_numeric(item.get("valorTotalEstimado"), errors="coerce"),
@@ -402,7 +403,7 @@ with st.sidebar:
     if admin_ok:
         st.success("Modo de entrega manual habilitado")
 
-key = f"dados_{opcoes[cidade_label]['id']}_{ano}_{mes_pncp}_{escopo_pncp}"
+key = f"pncp_v5_dados_{opcoes[cidade_label]['id']}_{ano}_{mes_pncp}_{escopo_pncp}"
 if consultar or key not in st.session_state:
     municipio = opcoes[cidade_label]
     with st.spinner("Consultando SICONFI e PNCP..."):
@@ -434,6 +435,7 @@ with tab1:
 with tab2:
     st.subheader(f"Contratações no PNCP — {escopo_pncp}")
     st.info(r["nota_pncp"])
+    st.caption("Classificação dos órgãos refeita na versão v5. A coluna Unidade administrativa permite conferir secretarias e fundos separadamente.")
     if not r["pncp"].empty:
         st.dataframe(r["pncp"], width="stretch", hide_index=True)
         st.download_button("Baixar registros desta página (CSV)", r["pncp"].to_csv(index=False).encode("utf-8-sig"), file_name=f"pncp_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
