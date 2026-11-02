@@ -851,7 +851,7 @@ with tab3:
     st.subheader("Raio-X municipal — relatório inicial")
     st.metric("Preço de lançamento", moeda(PRECO_RAIO_X))
     st.markdown("**O que o relatório inclui**")
-    st.markdown("- Despesas liquidadas por função orçamentária, sem dupla contagem entre funções e subfunções.\n- Percentuais sobre o total oficial de referência, quando disponível.\n- Amostra de objetos de contratações e valores estimados, separados das despesas do SICONFI.\n- Fontes, metodologia, escopo e limitações da consulta.\n- Arquivo PDF para leitura e compartilhamento.")
+    st.markdown("- Despesas liquidadas por função orçamentária, sem dupla contagem entre funções e subfunções.\n- Percentuais sobre o total oficial de referência, quando disponível.\n- Amostra de objetos de contratações e valores estimados, separados das despesas do SICONFI.\n- Comparação das despesas por função com o ano anterior, quando houver dados.\n- Fontes, metodologia, escopo e limitações da consulta.\n- Arquivo PDF para leitura e compartilhamento.")
     st.warning("O relatório é informativo e exploratório. Não é auditoria, parecer jurídico ou contábil, nem prova de irregularidade. Os resultados dependem da disponibilidade e da validação das fontes.")
     demo_pdf = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=True, contexto_pncp=r["nota_pncp"])
     st.download_button("Baixar demonstração gratuita em PDF", data=demo_pdf, file_name=f"demonstracao_radar_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
@@ -887,7 +887,22 @@ with tab3:
         st.divider()
         st.markdown("#### Área privada do responsável — entrega manual")
         st.warning("Use esta área somente depois de confirmar o pagamento fora do aplicativo. Confira município e exercício do pedido antes de gerar o arquivo. O app não verifica Pix nem registra pedidos pagos.")
-        pdf_pago = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=False, contexto_pncp=r["nota_pncp"])
+        with st.spinner("Consultando o ano anterior no SICONFI..."):
+            raw_anterior, nota_anterior = carregar_siconfi(r["municipio"]["id"], r["ano"] - 1)
+            resumo_anterior, _, nota_calculo_anterior = processar_resumo(raw_anterior)
+            if nota_calculo_anterior:
+                nota_anterior += " " + nota_calculo_anterior
+        st.caption(
+            f"Comparação: {r['ano'] - 1} versus {r['ano']}, mesma função e 6º bimestre; "
+            "valores nominais, sem ajuste de inflação."
+        )
+        pdf_pago = criar_pdf(
+            r["municipio"]["nome"], r["municipio"]["uf"], r["ano"],
+            r["resumo"], r["nota"], r["pncp"], demonstracao=False,
+            contexto_pncp=r["nota_pncp"],
+            resumo_anterior=resumo_anterior,
+            nota_anterior=nota_anterior,
+        )
         st.download_button("Gerar PDF para entrega manual", data=pdf_pago, file_name=f"raio_x_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
 
 st.divider()
