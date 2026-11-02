@@ -4,17 +4,17 @@ Primeira versão para validar o produto sem investir em infraestrutura ou integr
 
 ## O que funciona
 
-- Consulta de municípios pelo IBGE.
+- Consulta de municípios por lista local de códigos IBGE (API do IBGE como contingência).
 - Consulta exploratória ao SICONFI e ao PNCP.
 - Tabelas e CSVs dos dados retornados.
-- PDF demonstrativo gratuito, com limitações e fontes.
+- PDFs gratuito e de entrega manual com funções orçamentárias sem somar subfunções, percentuais condicionados ao total oficial e exemplos de contratações do PNCP.
 - Formulário que prepara uma solicitação para o relatório inicial de R$ 29.
 - Entrega manual: o app **não recebe nem confirma pagamentos** e não libera automaticamente produto pago.
 
 ## Limitações importantes
 
-- O resumo de despesas é exploratório e ainda precisa de validação contábil dos campos, granularidade e semântica do demonstrativo.
-- O PNCP mostra apenas a primeira página de até 20 registros; a busca textual por município não garante cobertura completa.
+- O resumo financeiro considera somente funções do RREO Anexo 02 (despesas liquidadas até o 6º bimestre) e evita somar subfunções sobrepostas. O total de referência (I) é usado para percentuais somente quando identificado sem ambiguidades. Não mostra pagamentos a fornecedores.
+- O PNCP pesquisa mês, trimestre ou ano, limitando-se por ora a pregão eletrônico e dispensa de licitação, até 8 páginas de 50 registros por modalidade. Os escopos Prefeitura/Administração Direta e Administração Municipal Ampliada dependem dos dados declarados na API; resultados não representam levantamento completo nem comprovam pagamento.
 - A IA generativa foi deixada de fora da primeira versão para reduzir custos e evitar conclusões sem suporte documental.
 - O formulário de pedido não envia os dados do formulário automaticamente nem guarda pedidos em banco de dados. Se `CHAVE_ADMIN_RELATORIOS` estiver configurada, o responsável pode entrar com essa chave para gerar um PDF sem a marca de demonstração após confirmar manualmente o pagamento; isso não verifica Pix nem registra pedidos pagos. Se `LINK_PEDIDOS` estiver configurado, aparece um botão para abrir o canal de contato; o cliente ainda precisa copiar/baixar a solicitação e enviá-la por esse canal.
 - Não usar como auditoria, laudo pericial ou prova de irregularidade.
