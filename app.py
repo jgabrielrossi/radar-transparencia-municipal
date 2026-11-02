@@ -132,7 +132,7 @@ def carregar_siconfi(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
         )
     frame = pd.DataFrame(todas)
     if frame.empty:
-        return frame, "O SICONFI não retornou linhas para os parâmetros selecionados."
+        return frame, (f"Sem registros na API para RREO Anexo 02, exercício {ano}, 6º bimestre. " "Isso não comprova ausência de despesas ou falta de prestação de contas. " "Municípios menores podem ter regras diferenciadas de apresentação; " "confira o Extrato de Entregas e os relatórios no SICONFI oficial.")
     required = {"coluna", "conta", "valor"}
     if not required.issubset(frame.columns):
         return frame, "O SICONFI não retornou todos os campos necessários ao resumo."
@@ -154,7 +154,7 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
         )
 
     if df.empty:
-        return pd.DataFrame(), None, "O SICONFI não retornou linhas para a consulta."
+        return pd.DataFrame(), None, ""
     required = {"conta", "coluna", "valor"}
     if not required.issubset(df.columns):
         return pd.DataFrame(), None, "Faltam os campos necessários no demonstrativo do SICONFI."
@@ -703,7 +703,10 @@ tab1, tab2, tab3 = st.tabs(["📊 Orçamento", "📑 Contratações", "📄 Rela
 
 with tab1:
     st.subheader("Onde foram liquidadas as despesas — por função orçamentária")
-    st.info(r["nota"])
+    if r["resumo"].empty:
+        st.warning(r["nota"] or "Não há informações financeiras suficientes para o resumo nesta consulta.")
+    else:
+        st.info(r["nota"])
     if not r["resumo"].empty:
         c1, c2 = st.columns(2)
         c1.metric("Maior função exibida", moeda(float(r["resumo"]["valor"].max())))
@@ -713,7 +716,7 @@ with tab1:
         st.dataframe(r["resumo"], width="stretch", hide_index=True)
         st.download_button("Baixar tabela exibida (CSV)", r["resumo"].to_csv(index=False).encode("utf-8-sig"), file_name=f"radar_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
-        st.warning("O resumo está indisponível. Veja o diagnóstico acima e consulte a fonte oficial.")
+        st.caption("Nenhum valor foi estimado artificialmente. Consulte outros exercícios e o extrato oficial de entregas para investigar a disponibilidade.")
     st.link_button("Consultar SICONFI oficial", "https://siconfi.tesouro.gov.br/")
 
 with tab2:
