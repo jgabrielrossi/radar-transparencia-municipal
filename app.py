@@ -22,7 +22,7 @@ IBGE_URL = "https://servicodados.ibge.gov.br/api/v1/localidades/municipios"
 SICONFI_URL = "https://apidatalake.tesouro.gov.br/ords/siconfi/tt/rreo"
 PNCP_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 REQUEST_TIMEOUT = 20
-PRECO_RAIO_X = 29.00
+PRECO_RAIO_X = 9.90
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🏛️", layout="wide")
 st.title("🏛️ Radar da Transparência Municipal")
@@ -1111,7 +1111,7 @@ r = st.session_state[key]
 
 st.header(f"{r['municipio']['nome']} — {r['municipio']['uf']} | {r['ano']}")
 st.caption("Fontes: SICONFI/Tesouro Nacional e Portal Nacional de Contratações Públicas (PNCP), conforme disponibilidade.")
-tab1, tab2, tab3 = st.tabs(["📊 Orçamento", "📑 Contratações", "📄 Relatório de R$ 29"])
+tab1, tab2, tab3 = st.tabs(["📊 Orçamento", "📑 Contratações", "📄 Relatório de R$ 9,90"])
 
 with tab1:
     st.subheader("Panorama geral das despesas liquidadas")
@@ -1216,7 +1216,7 @@ with tab3:
     demo_pdf = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=True, contexto_pncp=r["nota_pncp"])
     st.download_button("Baixar demonstração gratuita em PDF", data=demo_pdf, file_name=f"demonstracao_radar_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
     st.divider()
-    st.markdown("#### Solicitar o relatório completo por R$ 29")
+    st.markdown("#### Solicitar o relatório completo por R$ 9,90")
     st.write("Nesta primeira versão, o pedido é manual: você envia os dados do pedido, combina o pagamento e recebe o PDF depois da confirmação. O aplicativo ainda não processa pagamentos nem confirma Pix automaticamente.")
     with st.form("pedido_relatorio"):
         nome_cliente = st.text_input("Seu nome ou organização")
@@ -1224,14 +1224,14 @@ with tab3:
         municipio_pedido = st.text_input("Município/UF do relatório", value=f"{r['municipio']['nome']} - {r['municipio']['uf']}")
         ano_pedido = st.selectbox("Exercício desejado", [2025, 2024, 2023, 2022], index=[2025, 2024, 2023, 2022].index(r["ano"]))
         observacoes = st.text_area("O que você gostaria de entender? (opcional)", max_chars=500)
-        enviado = st.form_submit_button("Preparar solicitação — R$ 29", type="primary", width="stretch")
+        enviado = st.form_submit_button("Preparar solicitação — R$ 9,90", type="primary", width="stretch")
     if enviado:
         if not nome_cliente.strip() or not email_cliente.strip() or "@" not in email_cliente:
             st.error("Informe seu nome e um e-mail válido para preparar o pedido.")
         elif not municipio_pedido.strip():
             st.error("Informe o município e a UF.")
         else:
-            pedido = f"SOLICITAÇÃO — RADAR DA TRANSPARÊNCIA MUNICIPAL\nProduto: Raio-X municipal (R$ 29,00)\nNome/organização: {nome_cliente.strip()}\nE-mail: {email_cliente.strip()}\nMunicípio/UF: {municipio_pedido.strip()}\nExercício: {ano_pedido}\nPergunta do cliente: {observacoes.strip() or 'Não informada'}\n\nStatus: solicitação preparada; pagamento ainda NÃO realizado nem confirmado."
+            pedido = f"SOLICITAÇÃO — RADAR DA TRANSPARÊNCIA MUNICIPAL\nProduto: Raio-X municipal (R$ 9,90)\nNome/organização: {nome_cliente.strip()}\nE-mail: {email_cliente.strip()}\nMunicípio/UF: {municipio_pedido.strip()}\nExercício: {ano_pedido}\nPergunta do cliente: {observacoes.strip() or 'Não informada'}\n\nStatus: solicitação preparada; pagamento ainda NÃO realizado nem confirmado."
             st.success("Solicitação preparada. Copie o texto abaixo e envie ao responsável pelo Radar para combinar pagamento e prazo.")
             st.code(pedido, language="text")
             st.download_button("Baixar solicitação em TXT", data=pedido.encode("utf-8"), file_name="solicitacao_radar.txt", mime="text/plain")
