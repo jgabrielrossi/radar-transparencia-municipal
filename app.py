@@ -332,14 +332,6 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: 
         if bloqueado:
             break
         for pagina in range(1, max_paginas_por_modalidade + 1):
-            params = {
-                "dataInicial": data_inicial,
-                "dataFinal": data_final,
-                "codigoModalidadeContratacao": codigo,
-                "codigoMunicipioIbge": ibge_id,
-                "pagina": pagina,
-                "tamanhoPagina": por_pagina,
-            }
             itens, http, total_paginas = carregar_pagina_pncp(
                 data_inicial, data_final, codigo, ibge_id, pagina
             )
