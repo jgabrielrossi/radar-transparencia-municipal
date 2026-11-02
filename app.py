@@ -724,13 +724,27 @@ def moeda(valor: float) -> str:
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def populacoes_ibge_referencia(ano_pop: int = 2024) -> dict[str, int]:
-    """Estimativa IBGE/SIDRA 6579 (variavel 9324), nao populacao projetada."""
+    """Estimativas populacionais IBGE; requisição ampla com tolerância maior."""
     url = (
         f"https://servicodados.ibge.gov.br/api/v3/agregados/6579/"
         f"periodos/{ano_pop}/variaveis/9324"
     )
-    dados = get_json(url, {"localidades": "N6[all]"})
+    try:
+        resposta = requests.get(
+            url, params={"localidades": "N6[all]"}, timeout=70,
+            headers={"Accept": "application/json"},
+        )
+        resposta.raise_for_status()
+        dados = resposta.json()
+    except (requests.RequestException, ValueError) as exc:
+        print(f"IBGE populações 2024 indisponíveis: {exc}")
+        return {}
+    return extrair_populacoes_sidra(dados, ano_pop)
+
+
+def extrair_populacoes_sidra(dados: object, ano_pop: int) -> dict[str, int]:
     if not isinstance(dados, list):
         return {}
     resultado: dict[str, int] = {}
@@ -751,11 +765,22 @@ def populacoes_ibge_referencia(ano_pop: int = 2024) -> dict[str, int]:
     return resultado
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def populacao_ibge_individual(ibge: str, ano_pop: int = 2024) -> int | None:
+    """Contingência leve quando a consulta de todos os municípios não responde."""
+    url = (
+        f"https://servicodados.ibge.gov.br/api/v3/agregados/6579/"
+        f"periodos/{ano_pop}/variaveis/9324"
+    )
+    dados = get_json(url, {"localidades": f"N6[{ibge}]"})
+    return extrair_populacoes_sidra(dados, ano_pop).get(str(ibge))
+
+
 def selecionar_pares_regionais(
     municipio: dict[str, str],
     municipios_disponiveis: list[dict[str, str]],
     populacoes: dict[str, int],
-    max_candidatos: int = 8,
+    max_candidatos: int = 24,
 ) -> list[dict[str, str]]:
     """Prioriza populações com diferença <=25% e mesma UF; depois mesma região."""
     uf_regiao = {
@@ -797,9 +822,9 @@ def localizar_municipio_comparavel(
     candidatos: tuple[tuple[str, str, str], ...],
     pop_base: tuple[tuple[str, int], ...],
 ) -> tuple[dict[str, str] | None, pd.DataFrame, float | None, str]:
-    """Máximo quatro tentativas SICONFI; descarta quadros sem totais válidos."""
+    """Busca primeiros candidatos com RREO oficial compatível."""
     pops = dict(pop_base)
-    for ident, nome, uf in candidatos[:4]:
+    for ident, nome, uf in candidatos[:10]:
         raw, nota = carregar_siconfi(ident, ano)
         if raw.empty:
             continue
@@ -820,7 +845,7 @@ def localizar_municipio_comparavel(
         )
     return None, pd.DataFrame(), None, (
         "Não foi encontrado par com dados SICONFI suficientes entre as "
-        "primeiras quatro localidades de porte semelhante. "
+        "primeiras dez localidades de porte semelhante. "
         "Comparação regional omitida, sem inventar valores."
     )
 
