@@ -228,21 +228,29 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
                 cnpj_confirmado = bool(cnpj_prefeitura and cnpj == cnpj_prefeitura)
                 esfera = normalizar(orgao.get("esferaId") or item.get("esferaId"))
                 poder = normalizar(orgao.get("poderId") or item.get("poderId"))
-                # Quando presentes, os dados oficiais de esfera e poder devem coincidir.
-                esfera_invalida = (esfera and esfera != "M") or (poder and poder != "E")
+                # O valor 'N' para poder apareceu no CSV real de Mossoró.
+                # Não rejeitar um órgão municipal apenas por esse valor.
+                esfera_invalida = bool(esfera and esfera != "M")
+                poder_invalido = bool(poder and poder not in ("E", "N"))
                 prefeitura = razao in nomes_prefeitura or cnpj_confirmado
                 secretaria = (
                     razao.startswith("SECRETARIA MUNICIPAL ")
                     or (razao.startswith("SECRETARIA DE ") and municipio_normalizado in razao)
                 )
-                unidade_secretaria = nome_unidade.startswith("SECRETARIA MUNICIPAL ")
+                unidade_fundo = nome_unidade.startswith(("FUNDO MUNICIPAL ", "FUNDO DE "))
+                unidade_indireta = any(
+                    termo in nome_unidade
+                    for termo in ("PREVIDENCIA", "INSTITUTO DE PREVIDENCIA", "AUTARQUIA", "FUNDACAO MUNICIPAL")
+                )
                 if ampliada:
-                    # Sem esfera municipal expressa, somente razoes sociais da
-                    # administracao direta permitem classificacao com cautela.
-                    aceito = (esfera == "M" and poder in ("", "E")) or prefeitura or secretaria
+                    aceito = esfera == "M" and poder in ("", "E", "N")
                 else:
-                    aceito = prefeitura or secretaria or (cnpj_confirmado and unidade_secretaria)
-                motivo = "Incluído" if aceito and not esfera_invalida else ("Esfera/poder incompatível" if esfera_invalida else "Identificação fora do escopo")
+                    aceito = (prefeitura or secretaria) and not unidade_fundo and not unidade_indireta
+                motivo = (
+                    "Esfera ou poder incompatível"
+                    if esfera_invalida or poder_invalido
+                    else ("Incluído" if aceito else "Identificação fora do escopo")
+                )
                 diagnostico.append({
                     "Órgão declarado": orgao.get("razaoSocial") or orgao.get("nome") or "Não informado",
                     "CNPJ": orgao.get("cnpj") or "Não informado",
@@ -251,7 +259,7 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
                     "Poder": poder or "Não informado",
                     "Situação": motivo,
                 })
-                if esfera_invalida or not aceito:
+                if esfera_invalida or poder_invalido or not aceito:
                     excluidos += 1
                     continue
                 linhas.append({
@@ -290,10 +298,11 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, escopo: s
         )
     else:
         descricao += (
-            "Administração Direta considera prefeitura e secretarias "
-            "municipais identificadas pela razão social, excluindo "
-            "previdência, fundos e autarquias com identificação própria. "
-            "Pode deixar de fora secretarias identificadas com outros nomes. "
+            "Administração Direta considera o órgão Município/Prefeitura "
+            "e secretarias municipais, usando razão social, CNPJ e unidade. "
+            "Exclui unidades explicitamente identificadas como fundos e "
+            "entidades previdenciárias. Classificação sujeita à qualidade "
+            "dos dados informados no PNCP. "
         )
     if truncado:
         descricao += "Limite de paginação atingido; podem existir mais registros. "
