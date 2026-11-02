@@ -470,6 +470,8 @@ def criar_pdf(
     nome: str, uf: str, ano: int, resumo: pd.DataFrame, nota: str,
     pncp: pd.DataFrame | None = None, demonstracao: bool = True,
     contexto_pncp: str = "",
+    resumo_anterior: pd.DataFrame | None = None,
+    nota_anterior: str = "",
 ) -> bytes:
     """PDF informativo: funções orçamentárias separadas de contratações PNCP."""
     buffer = io.BytesIO()
@@ -594,6 +596,59 @@ def criar_pdf(
                 "execução física das políticas nem os pagamentos por fornecedor.", corpo,
             ))
 
+
+    if not demonstracao:
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(
+            f"Comparação de despesas: {ano - 1} e {ano}",
+            estilos["Heading2"],
+        ))
+        anterior = resumo_anterior if resumo_anterior is not None else pd.DataFrame()
+        if not anterior.empty and not resumo.empty:
+            anteriores = {
+                str(row["conta"]).strip().casefold(): float(row["valor"])
+                for _, row in anterior.iterrows()
+            }
+            comparativos = [
+                [par("Função", cabecalho), par(str(ano - 1), cabecalho),
+                 par(str(ano), cabecalho), par("Variação", cabecalho)]
+            ]
+            for _, atual in resumo.head(10).iterrows():
+                nome = str(atual["conta"])
+                valor_anterior = anteriores.get(nome.strip().casefold())
+                if valor_anterior is None:
+                    continue
+                valor_atual = float(atual["valor"])
+                variacao = (
+                    f"{(valor_atual / valor_anterior - 1) * 100:+.1f}%"
+                    if valor_anterior > 0 else "N/D"
+                )
+                comparativos.append([
+                    par(nome), par(moeda(valor_anterior)),
+                    par(moeda(valor_atual)), par(variacao),
+                ])
+            if len(comparativos) > 1:
+                story.append(tabela(comparativos, [57*mm, 44*mm, 44*mm, 27*mm]))
+                story.append(Paragraph(
+                    "Variações NOMINAIS (sem correção da inflação), por mesma "
+                    "função orçamentária e mesmo 6º bimestre. Mudanças não "
+                    "comprovam eficiência, irregularidades ou qualidade do serviço.",
+                    pequeno,
+                ))
+            else:
+                story.append(Paragraph(
+                    "Nenhuma função foi encontrada em ambos os exercícios. "
+                    "Não foi calculada variação.", corpo,
+                ))
+        else:
+            story.append(Paragraph(
+                f"Dados de {ano - 1} indisponíveis ou insuficientes para "
+                "comparar funções orçamentárias. Nenhum valor foi estimado.", corpo,
+            ))
+        if nota_anterior:
+            story.append(Paragraph(
+                "Consulta do exercício anterior: " + html.escape(nota_anterior), pequeno,
+            ))
 
     story.append(Spacer(1, 8))
     story.append(Paragraph("2. Contratações publicadas — PNCP", estilos["Heading2"]))
