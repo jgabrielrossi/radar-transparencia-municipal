@@ -723,12 +723,120 @@ def moeda(valor: float) -> str:
     return (f"R$ {valor:,.2f}").replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def populacoes_ibge_referencia(ano_pop: int = 2024) -> dict[str, int]:
+    """Estimativa IBGE/SIDRA 6579 (variavel 9324), nao populacao projetada."""
+    url = (
+        f"https://servicodados.ibge.gov.br/api/v3/agregados/6579/"
+        f"periodos/{ano_pop}/variaveis/9324"
+    )
+    dados = get_json(url, {"localidades": "N6[all]"})
+    if not isinstance(dados, list):
+        return {}
+    resultado: dict[str, int] = {}
+    for variavel in dados:
+        if not isinstance(variavel, dict):
+            continue
+        for grupo in variavel.get("resultados", []):
+            for serie in grupo.get("series", []):
+                local = serie.get("localidade") or {}
+                ibge = str(local.get("id") or "")
+                valor = (serie.get("serie") or {}).get(str(ano_pop))
+                try:
+                    populacao = int(str(valor).replace(".", "").replace(",", ""))
+                except (TypeError, ValueError):
+                    continue
+                if len(ibge) == 7 and populacao > 0:
+                    resultado[ibge] = populacao
+    return resultado
+
+
+def selecionar_pares_regionais(
+    municipio: dict[str, str],
+    municipios_disponiveis: list[dict[str, str]],
+    populacoes: dict[str, int],
+    max_candidatos: int = 8,
+) -> list[dict[str, str]]:
+    """Prioriza populações com diferença <=25% e mesma UF; depois mesma região."""
+    uf_regiao = {
+        "RO": "Norte", "AC": "Norte", "AM": "Norte", "RR": "Norte",
+        "PA": "Norte", "AP": "Norte", "TO": "Norte",
+        "MA": "Nordeste", "PI": "Nordeste", "CE": "Nordeste",
+        "RN": "Nordeste", "PB": "Nordeste", "PE": "Nordeste",
+        "AL": "Nordeste", "SE": "Nordeste", "BA": "Nordeste",
+        "MG": "Sudeste", "ES": "Sudeste", "RJ": "Sudeste", "SP": "Sudeste",
+        "PR": "Sul", "SC": "Sul", "RS": "Sul",
+        "MS": "Centro-Oeste", "MT": "Centro-Oeste", "GO": "Centro-Oeste",
+        "DF": "Centro-Oeste",
+    }
+    origem = populacoes.get(str(municipio["id"]))
+    regiao = uf_regiao.get(municipio["uf"])
+    if not origem or not regiao:
+        return []
+    candidatos = []
+    for m in municipios_disponiveis:
+        if m["id"] == municipio["id"] or uf_regiao.get(m["uf"]) != regiao:
+            continue
+        pop = populacoes.get(str(m["id"]))
+        if not pop:
+            continue
+        diferenca = abs(pop - origem) / origem
+        if diferenca > 0.25:
+            continue
+        candidatos.append((
+            0 if m["uf"] == municipio["uf"] else 1,
+            diferenca, m["nome"], m,
+        ))
+    candidatos.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in candidatos[:max_candidatos]]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def localizar_municipio_comparavel(
+    municipio: dict[str, str], ano: int,
+    candidatos: tuple[tuple[str, str, str], ...],
+    pop_base: tuple[tuple[str, int], ...],
+) -> tuple[dict[str, str] | None, pd.DataFrame, float | None, str]:
+    """Máximo quatro tentativas SICONFI; descarta quadros sem totais válidos."""
+    pops = dict(pop_base)
+    for ident, nome, uf in candidatos[:4]:
+        raw, nota = carregar_siconfi(ident, ano)
+        if raw.empty:
+            continue
+        resumo_par, _, _ = processar_resumo(raw)
+        total_par = extrair_totais_rreo(raw)["I"]
+        if total_par is None or total_par <= 0 or resumo_par.empty:
+            continue
+        origem_pop = pops.get(municipio["id"])
+        pop = pops.get(ident)
+        if not origem_pop or not pop:
+            continue
+        par = {"id": ident, "nome": nome, "uf": uf}
+        diferenca = abs(pop - origem_pop) / origem_pop * 100
+        return par, resumo_par, total_par, (
+            f"Município selecionado por população IBGE 2024, mesmo estado "
+            f"ou região, com diferença populacional de {diferenca:.1f}%. "
+            f"RREO Anexo 02, exercício {ano}, 6º bimestre. {nota}"
+        )
+    return None, pd.DataFrame(), None, (
+        "Não foi encontrado par com dados SICONFI suficientes entre as "
+        "primeiras quatro localidades de porte semelhante. "
+        "Comparação regional omitida, sem inventar valores."
+    )
+
+
 def criar_pdf(
     nome: str, uf: str, ano: int, resumo: pd.DataFrame, nota: str,
     pncp: pd.DataFrame | None = None, demonstracao: bool = True,
     contexto_pncp: str = "",
     resumo_anterior: pd.DataFrame | None = None,
     nota_anterior: str = "",
+    peer: dict[str, str] | None = None,
+    resumo_peer: pd.DataFrame | None = None,
+    total_peer: float | None = None,
+    pop_origem: int | None = None,
+    pop_peer: int | None = None,
+    nota_peer: str = "",
 ) -> bytes:
     """PDF informativo: funções orçamentárias separadas de contratações PNCP."""
     buffer = io.BytesIO()
@@ -1029,6 +1137,70 @@ def criar_pdf(
             ))
 
 
+    if not demonstracao:
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Comparação regional entre municípios de porte semelhante", estilos["Heading2"]))
+        if (
+            peer is not None and resumo_peer is not None and not resumo_peer.empty
+            and pop_origem and pop_peer and total_peer is not None
+        ):
+            total_origem = float(resumo.attrs.get("total_oficial_I", 0) or 0)
+            # Total oficial é injetado no gerador a partir da fonte original.
+            if total_origem > 0:
+                story.append(Paragraph(
+                    f"Comparação: {html.escape(nome)} ({html.escape(uf)}) e "
+                    f"{html.escape(peer['nome'])} ({html.escape(peer['uf'])}). "
+                    "População IBGE estimada em 2024, usada como base "
+                    f"de porte: {pop_origem:,} e {pop_peer:,} habitantes.".replace(",", "."),
+                    corpo,
+                ))
+                linhas_pares = [
+                    [par("Indicador", cabecalho),
+                     par(f"{nome} / {uf}", cabecalho),
+                     par(f"{peer['nome']} / {peer['uf']}", cabecalho)]
+                ]
+                linhas_pares.append([
+                    par("Despesa liquidada oficial (I)"),
+                    par(moeda(total_origem)), par(moeda(total_peer)),
+                ])
+                linhas_pares.append([
+                    par("Despesa (I) por habitante*"),
+                    par(moeda(total_origem / pop_origem)),
+                    par(moeda(total_peer / pop_peer)),
+                ])
+                mapa1 = {normalizar_contabil(x["conta"]): x for _, x in resumo.iterrows()}
+                mapa2 = {normalizar_contabil(x["conta"]): x for _, x in resumo_peer.iterrows()}
+                for funcao in ("SAUDE", "EDUCACAO", "ADMINISTRACAO"):
+                    um, dois = mapa1.get(funcao), mapa2.get(funcao)
+                    if um is None or dois is None:
+                        continue
+                    linhas_pares.append([
+                        par(str(um["conta"]) + " (% sobre I)"),
+                        par(f"{float(um['valor']) / total_origem * 100:.1f}%"),
+                        par(f"{float(dois['valor']) / total_peer * 100:.1f}%"),
+                    ])
+                story.append(tabela(linhas_pares, [65*mm, 53*mm, 54*mm]))
+                story.append(Paragraph(
+                    "*População de referência IBGE 2024 para ambos, inclusive "
+                    "quando o exercício fiscal é diferente. Indicadores nominais, "
+                    "sem ajuste de inflação. Diferenças não demonstram eficiência "
+                    "ou equivalência dos serviços, estruturas ou responsabilidades.",
+                    pequeno,
+                ))
+            else:
+                story.append(Paragraph(
+                    "Total (I) do município principal não validado; "
+                    "comparação regional de valores omitida.", corpo,
+                ))
+        else:
+            story.append(Paragraph(
+                "Não foi possível validar um município de porte semelhante "
+                "com dados comparáveis. O relatório não estima os valores ausentes.",
+                corpo,
+            ))
+        if nota_peer:
+            story.append(Paragraph(html.escape(nota_peer), pequeno))
+
     story.append(Spacer(1, 5))
     story.append(Paragraph("3. Fontes e limites da consulta", estilos["Heading2"]))
     story.append(Paragraph(html.escape(nota), pequeno))
@@ -1295,12 +1467,33 @@ with tab3:
                 )
             else:
                 st.caption("Nenhuma linha de Administração no retorno da consulta anterior.")
+        with st.spinner("Buscando município de porte semelhante para comparação..."):
+            populacoes = populacoes_ibge_referencia(2024)
+            candidatos = selecionar_pares_regionais(r["municipio"], municipios, populacoes)
+            par, resumo_par, total_par, nota_par = localizar_municipio_comparavel(
+                r["municipio"], r["ano"],
+                tuple((x["id"], x["nome"], x["uf"]) for x in candidatos),
+                tuple(sorted((x, populacoes[x]) for x in
+                             [r["municipio"]["id"]] + [m["id"] for m in candidatos]
+                             if x in populacoes)),
+            )
+        # O denominador usado no quadro do município é o total oficial (I).
+        resumo_atual_pdf = r["resumo"].copy()
+        resumo_atual_pdf.attrs["total_oficial_I"] = extrair_totais_rreo(r["raw"])["I"]
+        st.caption(
+            f"Comparação regional: {par['nome']} ({par['uf']})"
+            if par else nota_par
+        )
         pdf_pago = criar_pdf(
             r["municipio"]["nome"], r["municipio"]["uf"], r["ano"],
-            r["resumo"], r["nota"], r["pncp"], demonstracao=False,
+            resumo_atual_pdf, r["nota"], r["pncp"], demonstracao=False,
             contexto_pncp=r["nota_pncp"],
             resumo_anterior=resumo_anterior,
             nota_anterior=nota_anterior,
+            peer=par, resumo_peer=resumo_par, total_peer=total_par,
+            pop_origem=populacoes.get(r["municipio"]["id"]),
+            pop_peer=populacoes.get(par["id"]) if par else None,
+            nota_peer=nota_par,
         )
         st.download_button("Gerar PDF para entrega manual", data=pdf_pago, file_name=f"raio_x_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
         st.divider()
