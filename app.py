@@ -385,7 +385,7 @@ with st.sidebar:
         ["Prefeitura / Administração Direta", "Administração Municipal Ampliada"],
         help="A primeira opção inclui prefeitura e secretarias municipais identificadas. A ampliada inclui também outras entidades do Executivo municipal, como previdência e fundos.",
     )
-    consultar = st.button("Consultar dados públicos", type="primary", use_container_width=True)
+    consultar = st.button("Consultar dados públicos", type="primary", width="stretch")
     st.caption("A cobertura depende do exercício e da disponibilidade de cada fonte.")
     chave_admin_configurada = secret("CHAVE_ADMIN_RELATORIOS")
     chave_admin_digitada = st.text_input("Acesso do responsável (opcional)", type="password", help="Use somente se você configurou CHAVE_ADMIN_RELATORIOS nos Secrets.")
@@ -415,8 +415,8 @@ with tab1:
         c1.metric("Maior linha exibida", moeda(float(r["resumo"]["valor"].max())))
         c2.metric("Linhas retornadas", len(r["resumo"]))
         st.caption("As linhas podem se sobrepor. Não devem ser somadas.")
-        st.plotly_chart(px.bar(r["resumo"].head(12).sort_values("valor"), x="valor", y="conta", orientation="h", title="Maiores linhas retornadas"), use_container_width=True)
-        st.dataframe(r["resumo"], use_container_width=True, hide_index=True)
+        st.plotly_chart(px.bar(r["resumo"].head(12).sort_values("valor"), x="valor", y="conta", orientation="h", title="Maiores linhas retornadas"), width="stretch")
+        st.dataframe(r["resumo"], width="stretch", hide_index=True)
         st.download_button("Baixar tabela exibida (CSV)", r["resumo"].to_csv(index=False).encode("utf-8-sig"), file_name=f"radar_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
         st.warning("O resumo está indisponível. Veja o diagnóstico acima e consulte a fonte oficial.")
@@ -426,14 +426,14 @@ with tab2:
     st.subheader(f"Contratações no PNCP — {escopo_pncp}")
     st.info(r["nota_pncp"])
     if not r["pncp"].empty:
-        st.dataframe(r["pncp"], use_container_width=True, hide_index=True)
+        st.dataframe(r["pncp"], width="stretch", hide_index=True)
         st.download_button("Baixar registros desta página (CSV)", r["pncp"].to_csv(index=False).encode("utf-8-sig"), file_name=f"pncp_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
         st.warning("A consulta não retornou registros para exibição. Não conclua que não houve contratação; verifique a pesquisa diretamente na fonte.")
     with st.expander("Diagnóstico: órgãos e unidades retornados pelo PNCP"):
         st.caption("Identificação conforme os campos enviados ao PNCP. A presença de um órgão não comprova vínculo administrativo com a prefeitura. Esta tabela é apenas para conferir filtros; não integra o PDF.")
         if not r["diagnostico_pncp"].empty:
-            st.dataframe(r["diagnostico_pncp"], use_container_width=True, hide_index=True)
+            st.dataframe(r["diagnostico_pncp"], width="stretch", hide_index=True)
             st.download_button("Baixar diagnóstico CSV", r["diagnostico_pncp"].to_csv(index=False).encode("utf-8-sig"), file_name="diagnostico_pncp.csv", mime="text/csv")
         else:
             st.write("Nenhum órgão recebido para diagnóstico.")
@@ -446,7 +446,7 @@ with tab3:
     st.markdown("- Resumo dos dados retornados para o município e exercício escolhidos.\n- Tabela e gráfico das categorias retornadas, quando os dados permitem.\n- Amostra das contratações identificadas como da prefeitura no PNCP, quando disponível.\n- Fontes, parâmetros de consulta, metodologia e limitações.\n- Arquivo PDF preparado para leitura e compartilhamento.")
     st.warning("O relatório é informativo e exploratório. Não é auditoria, parecer jurídico ou contábil, nem prova de irregularidade. Os resultados dependem da disponibilidade e da validação das fontes.")
     demo_pdf = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=True)
-    st.download_button("Baixar demonstração gratuita em PDF", data=demo_pdf, file_name=f"demonstracao_radar_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", use_container_width=True)
+    st.download_button("Baixar demonstração gratuita em PDF", data=demo_pdf, file_name=f"demonstracao_radar_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
     st.divider()
     st.markdown("#### Solicitar o relatório completo por R$ 29")
     st.write("Nesta primeira versão, o pedido é manual: você envia os dados do pedido, combina o pagamento e recebe o PDF depois da confirmação. O aplicativo ainda não processa pagamentos nem confirma Pix automaticamente.")
@@ -456,7 +456,7 @@ with tab3:
         municipio_pedido = st.text_input("Município/UF do relatório", value=f"{r['municipio']['nome']} - {r['municipio']['uf']}")
         ano_pedido = st.selectbox("Exercício desejado", [2025, 2024, 2023, 2022], index=[2025, 2024, 2023, 2022].index(r["ano"]))
         observacoes = st.text_area("O que você gostaria de entender? (opcional)", max_chars=500)
-        enviado = st.form_submit_button("Preparar solicitação — R$ 29", type="primary", use_container_width=True)
+        enviado = st.form_submit_button("Preparar solicitação — R$ 29", type="primary", width="stretch")
     if enviado:
         if not nome_cliente.strip() or not email_cliente.strip() or "@" not in email_cliente:
             st.error("Informe seu nome e um e-mail válido para preparar o pedido.")
@@ -472,7 +472,7 @@ with tab3:
             if contato:
                 st.info(f"Contato para combinar pagamento e entrega: {contato}")
             if link_pedidos.startswith("https://"):
-                st.link_button("Enviar solicitação ao responsável", link_pedidos, use_container_width=True)
+                st.link_button("Enviar solicitação ao responsável", link_pedidos, width="stretch")
             else:
                 st.caption("Antes de divulgar, configure LINK_PEDIDOS com um link https:// de WhatsApp ou formulário de contato em Settings → Secrets. Sem isso, o cliente precisará copiar ou baixar a solicitação e encaminhá-la manualmente.")
     if admin_ok:
@@ -480,7 +480,7 @@ with tab3:
         st.markdown("#### Área privada do responsável — entrega manual")
         st.warning("Use esta área somente depois de confirmar o pagamento fora do aplicativo. Confira município e exercício do pedido antes de gerar o arquivo. O app não verifica Pix nem registra pedidos pagos.")
         pdf_pago = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=False)
-        st.download_button("Gerar PDF para entrega manual", data=pdf_pago, file_name=f"raio_x_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", use_container_width=True)
+        st.download_button("Gerar PDF para entrega manual", data=pdf_pago, file_name=f"raio_x_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", width="stretch")
 
 st.divider()
 st.caption("Protótipo inicial • Sem integração de pagamento • Consulte e valide as fontes oficiais • Versão de teste, não auditada.")
