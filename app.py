@@ -144,14 +144,32 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
     return summary, None, note
 
 
-def buscar_pncp(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
-    """Amostra PNCP: dezembro, modalidades 6 e 8; primeira pagina de cada."""
-    # API de publicacao exige codigoModalidadeContratacao. O filtro geográfico
-    # oficial e o código IBGE da unidade administrativa, não busca textual.
+def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int) -> tuple[pd.DataFrame, str]:
+    """Amostra de publicacoes do PNCP cujo orgao contratante e a prefeitura."""
+    import unicodedata
+
+    def normalizar(valor: object) -> str:
+        sem_acentos = unicodedata.normalize("NFKD", str(valor or ""))
+        return " ".join(sem_acentos.encode("ascii", "ignore").decode("ascii").upper().split())
+
+    municipio_normalizado = normalizar(nome_municipio)
+    nomes_prefeitura = {
+        f"MUNICIPIO DE {municipio_normalizado}",
+        f"MUNICIPIO DO {municipio_normalizado}",
+        f"MUNICIPIO DA {municipio_normalizado}",
+        f"PREFEITURA MUNICIPAL DE {municipio_normalizado}",
+        f"PREFEITURA MUNICIPAL DO {municipio_normalizado}",
+        f"PREFEITURA MUNICIPAL DA {municipio_normalizado}",
+        f"PREFEITURA DE {municipio_normalizado}",
+        f"PREFEITURA DO {municipio_normalizado}",
+        f"PREFEITURA DA {municipio_normalizado}",
+    }
     modalidades = {6: "Pregão eletrônico", 8: "Dispensa de licitação"}
     linhas = []
     sucesso = 0
     falhas = 0
+    registros_consultados = 0
+    excluidos = 0
     for codigo, modalidade in modalidades.items():
         params = {
             "dataInicial": f"{ano}1201",
@@ -169,9 +187,26 @@ def buscar_pncp(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
         for item in data["data"]:
             if not isinstance(item, dict):
                 continue
+            registros_consultados += 1
             orgao = item.get("orgaoEntidade") or {}
+            if not isinstance(orgao, dict):
+                excluidos += 1
+                continue
+            # O municipio da unidade e o municipio do endereco, nao a entidade
+            # contratante. Exigimos denominacao exata da prefeitura/municipio.
+            nome_orgao = normalizar(orgao.get("razaoSocial"))
+            if nome_orgao not in nomes_prefeitura:
+                excluidos += 1
+                continue
+            if str(orgao.get("esferaId") or "M").upper() != "M":
+                excluidos += 1
+                continue
+            if str(orgao.get("poderId") or "E").upper() != "E":
+                excluidos += 1
+                continue
             linhas.append({
                 "Órgão": orgao.get("razaoSocial") or "Não informado",
+                "CNPJ do órgão": orgao.get("cnpj") or "Não informado",
                 "Objeto": item.get("objetoCompra") or "Descrição não informada",
                 "Modalidade": item.get("modalidadeNome") or modalidade,
                 "Valor estimado (R$)": pd.to_numeric(item.get("valorTotalEstimado"), errors="coerce"),
@@ -179,17 +214,23 @@ def buscar_pncp(ibge_id: str, ano: int) -> tuple[pd.DataFrame, str]:
                 "Identificador PNCP": item.get("numeroControlePNCP") or "Não informado",
             })
     detalhe = (
-        f"Amostra de 01/12 a 30/12/{ano}, modalidades pregão eletrônico (6) e "
-        "dispensa de licitação (8), primeira página (até 20 resultados) por modalidade. "
-        "Filtro geográfico pela unidade administrativa localizada no município, "
-        "não necessariamente pela prefeitura. Não é levantamento anual completo."
+        f"Amostra de 01/12 a 30/12/{ano}, pregão eletrônico e dispensa de licitação, "
+        f"primeira página (até 20 registros) de cada modalidade. Foram examinados "
+        f"{registros_consultados} registros e {excluidos} foram excluídos por não "
+        f"corresponderem à identificação da prefeitura. São incluídos apenas órgãos "
+        f"com denominação Município de {nome_municipio} ou Prefeitura de {nome_municipio} "
+        "(e variações de preposição), esfera municipal e poder Executivo. "
+        "Secretarias, fundos e autarquias com CNPJ/razão social próprios não são "
+        "automaticamente incluídos. O filtro é conservador e pode deixar de mostrar "
+        "contratações da prefeitura registradas com outra denominação. "
+        "A amostra não representa todas as compras da prefeitura no ano."
     )
     if not sucesso:
-        return pd.DataFrame(), "O PNCP não respondeu às consultas com os parâmetros oficiais. " + detalhe + " Consulte os logs para verificar erros HTTP ou bloqueios."
+        return pd.DataFrame(), "O PNCP não respondeu às consultas. " + detalhe
     if falhas:
-        detalhe = f"Atenção: {falhas} modalidade(s) falharam; resultado incompleto. " + detalhe
+        detalhe = f"Atenção: {falhas} modalidade(s) falharam; amostra incompleta. " + detalhe
     if not linhas:
-        detalhe = "Nenhum registro encontrado na amostra consultada; não significa ausência de contratações. " + detalhe
+        detalhe = "Não foram encontrados registros identificados como da prefeitura nesta amostra limitada. Isso não significa ausência de contratações. " + detalhe
     return pd.DataFrame(linhas), detalhe
 
 
@@ -278,7 +319,7 @@ if consultar or key not in st.session_state:
     with st.spinner("Consultando SICONFI e PNCP..."):
         raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
         resumo, total, nota_resumo = processar_resumo(raw)
-        pncp, nota_pncp = buscar_pncp(municipio["id"], ano)
+        pncp, nota_pncp = buscar_pncp(municipio["id"], municipio["nome"], ano)
         st.session_state[key] = {"municipio": municipio, "ano": ano, "raw": raw, "resumo": resumo, "total": total, "nota": f"{nota_siconfi} {nota_resumo}", "pncp": pncp, "nota_pncp": nota_pncp}
 r = st.session_state[key]
 
@@ -302,7 +343,7 @@ with tab1:
     st.link_button("Consultar SICONFI oficial", "https://siconfi.tesouro.gov.br/")
 
 with tab2:
-    st.subheader("Contratações localizadas no PNCP")
+    st.subheader("Contratações identificadas como da prefeitura no PNCP")
     st.info(r["nota_pncp"])
     if not r["pncp"].empty:
         st.dataframe(r["pncp"], use_container_width=True, hide_index=True)
@@ -315,7 +356,7 @@ with tab3:
     st.subheader("Raio-X municipal — relatório inicial")
     st.metric("Preço de lançamento", moeda(PRECO_RAIO_X))
     st.markdown("**O que o relatório inclui**")
-    st.markdown("- Resumo dos dados retornados para o município e exercício escolhidos.\n- Tabela e gráfico das categorias retornadas, quando os dados permitem.\n- Amostra da consulta de contratações no PNCP, quando disponível.\n- Fontes, parâmetros de consulta, metodologia e limitações.\n- Arquivo PDF preparado para leitura e compartilhamento.")
+    st.markdown("- Resumo dos dados retornados para o município e exercício escolhidos.\n- Tabela e gráfico das categorias retornadas, quando os dados permitem.\n- Amostra das contratações identificadas como da prefeitura no PNCP, quando disponível.\n- Fontes, parâmetros de consulta, metodologia e limitações.\n- Arquivo PDF preparado para leitura e compartilhamento.")
     st.warning("O relatório é informativo e exploratório. Não é auditoria, parecer jurídico ou contábil, nem prova de irregularidade. Os resultados dependem da disponibilidade e da validação das fontes.")
     demo_pdf = criar_pdf(r["municipio"]["nome"], r["municipio"]["uf"], r["ano"], r["resumo"], r["nota"], r["pncp"], demonstracao=True)
     st.download_button("Baixar demonstração gratuita em PDF", data=demo_pdf, file_name=f"demonstracao_radar_{r['municipio']['id']}_{r['ano']}.pdf", mime="application/pdf", use_container_width=True)
