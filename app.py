@@ -1260,6 +1260,33 @@ with tab3:
             f"Comparação: {r['ano'] - 1} versus {r['ano']}, mesma função e 6º bimestre; "
             "valores nominais, sem ajuste de inflação."
         )
+        with st.expander("Diagnóstico contábil: função Administração no ano anterior"):
+            linhas_ant = selecionar_coluna_liquidada(raw_anterior)
+            if not linhas_ant.empty:
+                linhas_ant = linhas_ant[
+                    linhas_ant["_conta_norm"] == "ADMINISTRACAO"
+                ]
+            if not linhas_ant.empty:
+                campos = [
+                    coluna for coluna in
+                    ("conta", "cod_conta", "rotulo", "quadro", "instituicao",
+                     "co_poder", "valor")
+                    if coluna in linhas_ant.columns
+                ]
+                st.caption(
+                    "Linhas brutas do SICONFI para conferir a classificação "
+                    "quando o valor do exercício anterior não for validado. "
+                    "Não representam valores que devam ser somados."
+                )
+                st.dataframe(linhas_ant[campos].drop_duplicates(), width="stretch")
+                st.download_button(
+                    "Baixar linhas de Administração (CSV)",
+                    linhas_ant[campos].drop_duplicates().to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"administracao_{r['municipio']['id']}_{r['ano'] - 1}.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.caption("Nenhuma linha de Administração no retorno da consulta anterior.")
         pdf_pago = criar_pdf(
             r["municipio"]["nome"], r["municipio"]["uf"], r["ano"],
             r["resumo"], r["nota"], r["pncp"], demonstracao=False,
