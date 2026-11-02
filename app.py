@@ -725,42 +725,42 @@ def criar_pdf(
                 [par("Função", cabecalho), par(str(ano - 1), cabecalho),
                  par(str(ano), cabecalho), par("Variação", cabecalho)]
             ]
-            linhas_comparaveis = []
-            for _, atual in resumo.iterrows():
+            # Mostrar as seis maiores funcoes do ano atual, inclusive se
+            # o ano anterior nao passou na validacao contabil.
+            selecao = []
+            for _, atual in resumo.head(6).iterrows():
                 nome = str(atual["conta"])
                 valor_anterior = anteriores.get(nome.strip().casefold())
-                if valor_anterior is None:
-                    continue
                 valor_atual = float(atual["valor"])
                 variacao_pct = (
                     (valor_atual / valor_anterior - 1) * 100
-                    if valor_anterior > 0 else None
+                    if valor_anterior is not None and valor_anterior > 0 else None
                 )
-                linhas_comparaveis.append({
-                    "nome": nome, "anterior": valor_anterior,
-                    "atual": valor_atual, "variacao": variacao_pct,
-                })
-            seis = linhas_comparaveis[:6]
-            adicionais = [
-                item for item in linhas_comparaveis[6:]
-                if item["variacao"] is not None and item["variacao"] > 100
-            ]
-            destaque = max(adicionais, key=lambda item: item["variacao"]) if adicionais else None
-            selecionadas = seis + ([destaque] if destaque is not None else [])
-            for item in selecionadas:
-                variacao = (
-                    f"{item['variacao']:+.1f}%"
-                    if item["variacao"] is not None else "N/D"
-                )
-                nome = item["nome"] + (" (destaque >100%)" if item is destaque else "")
+                selecao.append((nome, valor_anterior, valor_atual, variacao_pct, False))
+            # Destaque adicional fora das seis primeiras, com aumento > 100%.
+            candidatos = []
+            for _, atual in resumo.iloc[6:].iterrows():
+                nome = str(atual["conta"])
+                valor_anterior = anteriores.get(nome.strip().casefold())
+                if valor_anterior is None or valor_anterior <= 0:
+                    continue
+                valor_atual = float(atual["valor"])
+                variacao_pct = (valor_atual / valor_anterior - 1) * 100
+                if variacao_pct > 100:
+                    candidatos.append((nome, valor_anterior, valor_atual, variacao_pct, True))
+            if candidatos:
+                selecao.append(max(candidatos, key=lambda x: x[3]))
+            for nome, valor_anterior, valor_atual, variacao_pct, destaque in selecao:
                 comparativos.append([
-                    par(nome), par(moeda(item["anterior"])),
-                    par(moeda(item["atual"])), par(variacao),
+                    par(nome + (" (destaque >100%)" if destaque else "")),
+                    par(moeda(valor_anterior) if valor_anterior is not None else "Não validado"),
+                    par(moeda(valor_atual)),
+                    par(f"{variacao_pct:+.1f}%" if variacao_pct is not None else "N/D"),
                 ])
             if len(comparativos) > 1:
                 story.append(tabela(comparativos, [57*mm, 44*mm, 44*mm, 27*mm]))
                 story.append(Paragraph(
-                    "Seis maiores funções comparáveis no ano atual, mais o "
+                    "Seis maiores funções do ano atual (com N/D quando o exercício anterior não é válido), mais o "
                     "maior crescimento acima de 100% fora desse grupo, se houver. "
                     "Variações NOMINAIS, sem correção da inflação, no mesmo "
                     "6º bimestre. Base pequena pode produzir variação alta. "
