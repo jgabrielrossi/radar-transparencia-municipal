@@ -78,3 +78,7 @@ Os planos gratuitos têm limites e podem mudar. Não habilite gastos pagos sem c
 Na área administrativa, é possível enviar um CSV exportado de um portal de transparência com as colunas `cnpj_fornecedor`, `nome_fornecedor`, `valor_pago`, `id_pagamento`. A tabela mostra frequência e participação por CNPJ e sinaliza, por padrão, 5 ou mais pagamentos ou 20% do total do arquivo. Não reutiliza estimativas de contratações do PNCP, não valida autenticidade ou completude do arquivo e não diagnostica irregularidade. A análise não é armazenada em banco de dados nem incluída automaticamente no PDF.
 
 Na comparação anual, as seis maiores funções do ano atual são preservadas mesmo quando o ano anterior não tiver valor validado; nesses casos, a variação aparece como N/D. Pode haver um destaque adicional de variação superior a 100%.
+
+## Totais e reconciliação de funções no SICONFI
+
+A aba Orçamento mostra primeiro a linha oficial de total de despesas liquidadas: **(III) = (I + II)**, quando identificada e consistente; caso contrário, mostra **(I) — exceto intraorçamentárias**, explicitando a cobertura. Nunca soma funções com subfunções para criar um total. O processamento tenta separar registros intraorçamentários pelas identificações de quadro/código/rotulo e, na comparação anual, procura o mesmo código contábil usado no exercício atual. Valores que ainda permaneçam conflitantes são omitidos da variação e ficam disponíveis para inspeção na área administrativa, na seção de diagnóstico de Administração.
