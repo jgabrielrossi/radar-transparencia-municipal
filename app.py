@@ -467,10 +467,10 @@ def consultar_fornecedores_resultados(identificador: str) -> tuple[pd.DataFrame,
     import re
     import time
 
-    partes = re.fullmatch(r"(\\d{14})-(\\d+)-(\\d{4})/(\\d+)", str(identificador).strip())
+    partes = re.fullmatch(r"(\d{14})-(\d+)-(\d+)/(\d{4})", str(identificador).strip())
     if not partes:
         return pd.DataFrame(), "Identificador PNCP inválido ou não reconhecido."
-    cnpj, _tipo, ano, sequencial = partes.groups()
+    cnpj, _tipo, sequencial, ano = partes.groups()
     base = f"https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{int(ano)}/{int(sequencial)}/itens"
     try:
         resposta = requests.get(
@@ -977,10 +977,6 @@ with tab2:
                 st.info(resultado_fornecedor["nota"])
                 if not resultado_fornecedor["dados"].empty:
                     st.dataframe(resultado_fornecedor["dados"], width="stretch", hide_index=True)
-                st.link_button(
-                    "Ver contratação no PNCP",
-                    "https://pncp.gov.br/app/editais/" + escolhido.replace("-1-", "/"),
-                )
     with st.expander("Diagnóstico: órgãos e unidades retornados pelo PNCP"):
         st.caption("Identificação conforme os campos enviados ao PNCP. A presença de um órgão não comprova vínculo administrativo com a prefeitura. Esta tabela é apenas para conferir filtros; não integra o PDF.")
         if not r["diagnostico_pncp"].empty:
