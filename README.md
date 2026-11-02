@@ -8,6 +8,7 @@ Primeira versão para validar o produto sem investir em infraestrutura ou integr
 - Consulta exploratória ao SICONFI e ao PNCP.
 - Tabelas e CSVs dos dados retornados.
 - PDFs gratuito e de entrega manual com funções orçamentárias sem somar subfunções, percentuais condicionados ao total oficial e exemplos de contratações do PNCP.
+- Versão completa de R$ 29 inclui leitura orientada: concentração das despesas nas maiores funções, diferença entre funções, unidades mais frequentes nos registros PNCP, maiores valores estimados com identificadores e alertas de dados zerados/consultas incompletas. Esses insights não caracterizam auditoria ou comprovação de pagamento.
 - Formulário que prepara uma solicitação para o relatório inicial de R$ 29.
 - Entrega manual: o app **não recebe nem confirma pagamentos** e não libera automaticamente produto pago.
 
