@@ -305,6 +305,11 @@ with st.sidebar:
     st.header("Consulta gratuita")
     cidade_label = st.selectbox("Município", labels, index=default_a)
     ano = st.selectbox("Exercício", [2025, 2024, 2023, 2022], index=0)
+    escopo_pncp = st.radio(
+        "Contratações incluídas",
+        ["Somente Prefeitura", "Administração Municipal Ampliada"],
+        help="A opção ampliada inclui órgãos municipais do Executivo na amostra do PNCP.",
+    )
     consultar = st.button("Consultar dados públicos", type="primary", use_container_width=True)
     st.caption("A cobertura depende do exercício e da disponibilidade de cada fonte.")
     chave_admin_configurada = secret("CHAVE_ADMIN_RELATORIOS")
@@ -313,13 +318,13 @@ with st.sidebar:
     if admin_ok:
         st.success("Modo de entrega manual habilitado")
 
-key = f"dados_{opcoes[cidade_label]['id']}_{ano}"
+key = f"dados_{opcoes[cidade_label]['id']}_{ano}_{escopo_pncp}"
 if consultar or key not in st.session_state:
     municipio = opcoes[cidade_label]
     with st.spinner("Consultando SICONFI e PNCP..."):
         raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
         resumo, total, nota_resumo = processar_resumo(raw)
-        pncp, nota_pncp = buscar_pncp(municipio["id"], municipio["nome"], ano)
+        pncp, nota_pncp = buscar_pncp(municipio["id"], municipio["nome"], ano, escopo_pncp)
         st.session_state[key] = {"municipio": municipio, "ano": ano, "raw": raw, "resumo": resumo, "total": total, "nota": f"{nota_siconfi} {nota_resumo}", "pncp": pncp, "nota_pncp": nota_pncp}
 r = st.session_state[key]
 
@@ -343,7 +348,7 @@ with tab1:
     st.link_button("Consultar SICONFI oficial", "https://siconfi.tesouro.gov.br/")
 
 with tab2:
-    st.subheader("Contratações identificadas como da prefeitura no PNCP")
+    st.subheader(f"Contratações no PNCP — {escopo_pncp}")
     st.info(r["nota_pncp"])
     if not r["pncp"].empty:
         st.dataframe(r["pncp"], use_container_width=True, hide_index=True)
