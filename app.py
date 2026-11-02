@@ -891,6 +891,11 @@ with tab3:
             resumo_anterior, _, nota_calculo_anterior = processar_resumo(raw_anterior)
             if nota_calculo_anterior:
                 nota_anterior += " " + nota_calculo_anterior
+            atual_simplificado = "RREO Simplificado" in r["nota"]
+            anterior_simplificado = "RREO Simplificado" in nota_anterior
+            if not resumo_anterior.empty and atual_simplificado != anterior_simplificado:
+                resumo_anterior = pd.DataFrame()
+                nota_anterior += " Comparação omitida: tipos de RREO diferentes entre exercícios."
         st.caption(
             f"Comparação: {r['ano'] - 1} versus {r['ano']}, mesma função e 6º bimestre; "
             "valores nominais, sem ajuste de inflação."
