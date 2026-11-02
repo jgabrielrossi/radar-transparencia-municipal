@@ -1065,7 +1065,7 @@ with st.sidebar:
     if admin_ok:
         st.success("Modo de entrega manual habilitado")
 
-key = f"pncp_cache_v9_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
+key = f"rreo_quadro_v10_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
 municipio = opcoes[cidade_label]
 if key not in st.session_state:
     raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
@@ -1105,7 +1105,35 @@ st.caption("Fontes: SICONFI/Tesouro Nacional e Portal Nacional de Contratações
 tab1, tab2, tab3 = st.tabs(["📊 Orçamento", "📑 Contratações", "📄 Relatório de R$ 29"])
 
 with tab1:
-    st.subheader("Onde foram liquidadas as despesas — por função orçamentária")
+    st.subheader("Panorama geral das despesas liquidadas")
+    totais_orcamentarios = extrair_totais_rreo(r["raw"])
+    if totais_orcamentarios["III"] is not None:
+        st.metric(
+            "Total liquidado até o 6º bimestre — incluindo intraorçamentárias (III)",
+            moeda(totais_orcamentarios["III"]),
+        )
+        if totais_orcamentarios["I"] is not None:
+            st.caption(
+                "Parcela exceto intraorçamentárias (I): "
+                + moeda(totais_orcamentarios["I"])
+                + ". O total (III) inclui despesas intraorçamentárias e "
+                "não deve ser somado novamente às funções abaixo."
+            )
+    elif totais_orcamentarios["I"] is not None:
+        st.metric(
+            "Total liquidado até o 6º bimestre — exceto intraorçamentárias (I)",
+            moeda(totais_orcamentarios["I"]),
+        )
+        st.caption(
+            "Este valor exclui despesas intraorçamentárias. O total (III) "
+            "não pôde ser confirmado com os registros recebidos."
+        )
+    else:
+        st.warning(
+            "Não foi possível validar o total oficial de despesas liquidadas. "
+            "Nenhum total foi estimado pela soma de funções ou subfunções."
+        )
+    st.subheader("Distribuição das despesas por função orçamentária")
     if r["resumo"].empty:
         st.warning(r["nota"] or "Não há informações financeiras suficientes para o resumo nesta consulta.")
     else:
