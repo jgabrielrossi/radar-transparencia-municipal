@@ -257,17 +257,25 @@ def processar_resumo(
     if linhas.empty:
         return pd.DataFrame(), None, "O Anexo 02 não retornou linhas individuais de funções."
 
-    for campo in ("cod_conta", "rotulo", "quadro"):
-        if campo not in linhas.columns:
-            linhas[campo] = ""
-        linhas[f"_norm_{campo}"] = linhas[campo].map(normalizar_contabil)
-    # Linhas explicitamente classificadas como intra não entram no detalhamento
-    # do total (I). Preservar as demais sem presumir quadros desconhecidos.
+    # O campo "rotulo" pode indicar o demonstrativo inteiro,
+    # e conter a palavra INTRA mesmo nas funções do quadro (I).
+    # Não excluir a linha de função com base nesse texto: isso
+    # ocultava TODAS as funções em municípios com certos layouts.
+    if "cod_conta" not in linhas.columns:
+        linhas["cod_conta"] = ""
+    linhas["_norm_cod_conta"] = linhas["cod_conta"].map(normalizar_contabil)
+    # Atribuir intra apenas quando o próprio identificador da linha o
+    # declarar explicitamente, sem filtrar por rótulos do documento.
     linhas = linhas[
-        ~linhas[["_norm_cod_conta", "_norm_rotulo", "_norm_quadro"]]
-        .apply(lambda c: c.str.contains("INTRA", na=False))
-        .any(axis=1)
+        ~linhas["_norm_cod_conta"].str.contains(
+            r"INTRA[-_ ]?ORCAMENT", regex=True, na=False
+        )
     ].copy()
+    if linhas.empty:
+        return pd.DataFrame(), extrair_totais_rreo(df)["I"], (
+            "A classificação individual não pôde ser validada; "
+            "o total oficial permanece disponível."
+        )
     grupos = []
     conflitos = []
     referencias = codigos_referencia or {}
@@ -1066,7 +1074,7 @@ with st.sidebar:
     if admin_ok:
         st.success("Modo de entrega manual habilitado")
 
-key = f"rreo_quadro_v10_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
+key = f"rreo_funcoes_v11_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
 municipio = opcoes[cidade_label]
 if key not in st.session_state:
     raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
