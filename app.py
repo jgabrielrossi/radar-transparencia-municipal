@@ -440,19 +440,18 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: 
 
 
 def resumir_objeto(texto: object, limite: int = 160) -> str:
-    """Remove textos padrao sem criar informações ausentes do objeto oficial."""
+    """Resumo extrativo: retira prefácios padronizados, preservando objeto original."""
     import re
-    import unicodedata
     original = " ".join(str(texto or "").split())
     if not original or original == "Descrição não informada":
         return "Objeto não informado"
-    original = re.sub(r"^\\[Portal de Compras Públicas\\]\\s*[-–:]?\\s*", "", original, flags=re.I)
-    original = re.sub(r"^o objeto da presente licita[çc][ãa]o [ée]\\s+", "", original, flags=re.I)
+    original = re.sub(r"^\[Portal de Compras Públicas\]\s*[-–:]?\s*", "", original, flags=re.I)
+    original = re.sub(r"^o objeto da presente licita[çc][ãa]o [ée]\s+", "", original, flags=re.I)
     original = re.sub(
-        r"^(?:a escolha mais vantajosa para|a sele[çc][ãa]o da proposta mais vantajosa para)\\s+",
+        r"^(?:a escolha mais vantajosa para|a sele[çc][ãa]o da proposta mais vantajosa para)\s+",
         "", original, flags=re.I,
     )
-    original = re.sub(r"^(?:o|a)\\s+(?=(?:contrata[çc][ãa]o|aquisi[çc][ãa]o))", "", original, flags=re.I)
+    original = re.sub(r"^(?:o|a)\s+(?=(?:contrata[çc][ãa]o|aquisi[çc][ãa]o))", "", original, flags=re.I)
     original = original.lstrip(" -:;,.")
     if not original:
         return "Consulte o objeto original no PNCP"
