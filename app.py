@@ -513,6 +513,12 @@ def criar_pdf(
         "A consulta é limitada às modalidades, filtros e páginas indicados.", corpo,
     ))
     if contexto_pncp:
+        if "HTTP 429" in contexto_pncp or "Falhas:" in contexto_pncp:
+            story.append(Paragraph(
+                "ATENÇÃO: a consulta do PNCP apresentou falhas ou limitação "
+                "de requisições. Os resultados são parciais e não devem ser "
+                "interpretados como total de contratações.", pequeno,
+            ))
         story.append(Paragraph(html.escape(contexto_pncp), pequeno))
     if pncp is None or pncp.empty:
         story.append(Paragraph(
@@ -540,20 +546,15 @@ def criar_pdf(
             ])
         story.append(tabela(linhas, [53*mm, 79*mm, 40*mm]))
 
-    story.append(Spacer(1, 8))
-    story.append(Paragraph("3. Critérios, fontes e limitações", estilos["Heading2"]))
+    story.append(Spacer(1, 5))
+    story.append(Paragraph("3. Fontes e limites da consulta", estilos["Heading2"]))
     story.append(Paragraph(html.escape(nota), pequeno))
     story.append(Paragraph(
-        "Fonte financeira: SICONFI/Tesouro Nacional, RREO Anexo 02, despesas "
-        "liquidadas acumuladas até o 6º bimestre. A participação percentual "
-        "é calculada exclusivamente sobre o total oficial (I), quando disponível. "
-        "Não são somadas funções com subfunções. A origem do gasto não equivale "
-        "à identificação do destinatário do pagamento.", pequeno,
-    ))
-    story.append(Paragraph(
+        "Despesas por função (RREO Anexo 02), sem soma de subfunções. "
+        "Percentuais sobre o total oficial (I), quando disponível. "
+        "Não identificam destinatários de pagamentos. "
         "Fontes: https://siconfi.tesouro.gov.br/ e https://pncp.gov.br/ . "
-        "Documentação informativa e exploratória; não é prova de irregularidade, "
-        "fraude, ilegalidade ou conformidade legal.", pequeno,
+        "Relatório informativo; não comprova irregularidades.", pequeno,
     ))
     doc.build(story)
     return buffer.getvalue()
