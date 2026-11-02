@@ -14,6 +14,7 @@ Primeira versão para validar o produto sem investir em infraestrutura ou integr
 
 ## Limitações importantes
 
+- Quando o RREO comum vier vazio, o sistema tenta RREO Simplificado para o mesmo exercício e 6º bimestre, sem presumir que ausência na API significa falta de despesas.
 - O resumo financeiro considera somente funções do RREO Anexo 02 (despesas liquidadas até o 6º bimestre) e evita somar subfunções sobrepostas. O total de referência (I) é usado para percentuais somente quando identificado sem ambiguidades. Não mostra pagamentos a fornecedores.
 - O PNCP pesquisa mês, trimestre ou ano, limitando-se por ora a pregão eletrônico e dispensa de licitação, até 8 páginas de 50 registros por modalidade. Os escopos Prefeitura/Administração Direta e Administração Municipal Ampliada dependem dos dados declarados na API; resultados não representam levantamento completo nem comprovam pagamento.
 - A IA generativa foi deixada de fora da primeira versão para reduzir custos e evitar conclusões sem suporte documental.
