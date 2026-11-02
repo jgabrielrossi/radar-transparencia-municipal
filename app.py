@@ -255,6 +255,39 @@ def processar_resumo(df: pd.DataFrame) -> tuple[pd.DataFrame, float | None, str]
     return resumo, total, nota
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def carregar_pagina_pncp(data_inicial: str, data_final: str, codigo: int, ibge_id: str, pagina: int) -> tuple[list[dict[str, Any]] | None, int, int | None]:
+    """Cache de 30 min, inclusive para 429: evita repetir chamadas em cada rerun."""
+    params = {
+        "dataInicial": data_inicial, "dataFinal": data_final,
+        "codigoModalidadeContratacao": codigo,
+        "codigoMunicipioIbge": ibge_id,
+        "pagina": pagina, "tamanhoPagina": 50,
+    }
+    try:
+        resposta = requests.get(
+            PNCP_URL, params=params, timeout=REQUEST_TIMEOUT,
+            headers={"Accept": "application/json", "User-Agent": "RadarTransparencia/0.6"},
+        )
+        if resposta.status_code == 204:
+            return [], 204, 0
+        if resposta.status_code != 200:
+            return None, resposta.status_code, None
+        dados = resposta.json()
+        itens = dados.get("data") if isinstance(dados, dict) else None
+        if not isinstance(itens, list):
+            return None, 0, None
+        total_paginas = dados.get("totalPaginas")
+        try:
+            total_paginas = int(total_paginas) if total_paginas is not None else None
+        except (ValueError, TypeError):
+            total_paginas = None
+        return itens, 200, total_paginas
+    except (requests.RequestException, ValueError) as exc:
+        print(f"Falha consulta PNCP: {type(exc).__name__}: {exc}")
+        return None, 0, None
+
+
 def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: str, escopo: str = "Prefeitura / Administração Direta") -> tuple[pd.DataFrame, str, pd.DataFrame]:
     """Pesquisa limitada com identificacao conservadora e diagnostico dos orgaos."""
     import unicodedata
@@ -293,8 +326,11 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: 
     paginas_consultadas = 0
     falhas = []
     truncado = False
+    bloqueado = False
 
     for codigo, modalidade in modalidades.items():
+        if bloqueado:
+            break
         for pagina in range(1, max_paginas_por_modalidade + 1):
             params = {
                 "dataInicial": data_inicial,
@@ -304,33 +340,23 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: 
                 "pagina": pagina,
                 "tamanhoPagina": por_pagina,
             }
-            try:
-                resposta = requests.get(
-                    PNCP_URL, params=params, timeout=REQUEST_TIMEOUT,
-                    headers={"Accept": "application/json", "User-Agent": "RadarTransparencia/0.4"},
+            itens, http, total_paginas = carregar_pagina_pncp(
+                data_inicial, data_final, codigo, ibge_id, pagina
+            )
+            if http == 204:
+                consultas_validas += 1
+                paginas_consultadas += 1
+                break
+            if itens is None:
+                falhas.append(
+                    f"{modalidade}, página {pagina}: "
+                    + (f"HTTP {http}" if http else "falha de rede ou formato inesperado")
                 )
-                if resposta.status_code == 204:
-                    consultas_validas += 1
-                    paginas_consultadas += 1
-                    break
-                resposta.raise_for_status()
-                dados = resposta.json()
-                if not isinstance(dados, dict) or not isinstance(dados.get("data"), list):
-                    falhas.append(f"{modalidade}, página {pagina}: formato inesperado")
-                    break
-            except requests.HTTPError as exc:
-                http = exc.response.status_code if exc.response is not None else "?"
-                falhas.append(f"{modalidade}, página {pagina}: HTTP {http}")
-                print(f"Falha PNCP: {modalidade}, pagina {pagina}: {exc}")
+                if http == 429:
+                    bloqueado = True
                 break
-            except (requests.RequestException, ValueError) as exc:
-                falhas.append(f"{modalidade}, página {pagina}: conexão ou JSON inválido")
-                print(f"Falha PNCP: {modalidade}, pagina {pagina}: {exc}")
-                break
-
             consultas_validas += 1
             paginas_consultadas += 1
-            itens = dados["data"]
             for item in itens:
                 if not isinstance(item, dict):
                     continue
@@ -394,7 +420,6 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: 
                     "Identificador PNCP": item.get("numeroControlePNCP") or "Não informado",
                 })
 
-            total_paginas = dados.get("totalPaginas")
             if isinstance(total_paginas, int) and pagina >= total_paginas:
                 break
             if len(itens) == 0 or (total_paginas is None and len(itens) < por_pagina):
@@ -430,6 +455,8 @@ def buscar_pncp(ibge_id: str, nome_municipio: str, ano: int, mes: int, periodo: 
         descricao += "Limite de paginação atingido; podem existir mais registros. "
     if falhas:
         descricao += "Falhas: " + "; ".join(falhas) + ". "
+    if bloqueado:
+        descricao += "O PNCP limitou requisições (HTTP 429); a consulta foi interrompida e novas tentativas automáticas foram evitadas. Resultados incompletos. "
     diagnostico_df = pd.DataFrame(diagnostico).drop_duplicates() if diagnostico else pd.DataFrame()
     if consultas_validas == 0:
         return pd.DataFrame(), "O PNCP não respondeu às consultas; não conclua ausência de contratos. " + descricao, diagnostico_df
@@ -901,7 +928,8 @@ with st.sidebar:
         ["Prefeitura / Administração Direta", "Administração Municipal Ampliada"],
         help="A primeira opção inclui prefeitura e secretarias municipais identificadas. A ampliada inclui também outras entidades do Executivo municipal, como previdência e fundos.",
     )
-    consultar = st.button("Consultar dados públicos", type="primary", width="stretch")
+    consultar = st.button("Consultar contratações PNCP", type="primary", width="stretch")
+    st.caption("As despesas são carregadas normalmente. O PNCP só é consultado quando você clica no botão, para reduzir erros HTTP 429.")
     st.caption("A cobertura depende do exercício e da disponibilidade de cada fonte.")
     chave_admin_configurada = secret("CHAVE_ADMIN_RELATORIOS")
     chave_admin_digitada = st.text_input("Acesso do responsável (opcional)", type="password", help="Use somente se você configurou CHAVE_ADMIN_RELATORIOS nos Secrets.")
@@ -909,14 +937,39 @@ with st.sidebar:
     if admin_ok:
         st.success("Modo de entrega manual habilitado")
 
-key = f"finance_v8_dados_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
-if consultar or key not in st.session_state:
-    municipio = opcoes[cidade_label]
-    with st.spinner("Consultando SICONFI e PNCP..."):
-        raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
-        resumo, total, nota_resumo = processar_resumo(raw)
-        pncp, nota_pncp, diagnostico_pncp = buscar_pncp(municipio["id"], municipio["nome"], ano, mes_pncp, periodo_pncp, escopo_pncp)
-        st.session_state[key] = {"municipio": municipio, "ano": ano, "raw": raw, "resumo": resumo, "total": total, "nota": f"{nota_siconfi} {nota_resumo}", "pncp": pncp, "nota_pncp": nota_pncp, "mes_pncp": mes_pncp, "periodo_pncp": periodo_pncp, "diagnostico_pncp": diagnostico_pncp}
+key = f"pncp_cache_v9_{opcoes[cidade_label]['id']}_{ano}_{periodo_pncp}_{mes_pncp}_{escopo_pncp}"
+municipio = opcoes[cidade_label]
+if key not in st.session_state:
+    raw, nota_siconfi = carregar_siconfi(municipio["id"], ano)
+    resumo, total, nota_resumo = processar_resumo(raw)
+    st.session_state[key] = {
+        "municipio": municipio, "ano": ano, "raw": raw,
+        "resumo": resumo, "total": total,
+        "nota": f"{nota_siconfi} {nota_resumo}",
+        "pncp": pd.DataFrame(),
+        "nota_pncp": "Consulta PNCP ainda não iniciada. Clique em 'Consultar contratações PNCP' na barra lateral. A ausência de linhas antes da consulta não indica ausência de contratos.",
+        "mes_pncp": mes_pncp, "periodo_pncp": periodo_pncp,
+        "diagnostico_pncp": pd.DataFrame(), "pncp_consultado": False,
+    }
+if consultar:
+    with st.spinner("Consultando PNCP com cache para reduzir bloqueios..."):
+        pncp, nota_pncp, diagnostico_pncp = buscar_pncp(
+            municipio["id"], municipio["nome"], ano, mes_pncp, periodo_pncp, escopo_pncp
+        )
+        anterior = st.session_state[key]
+        falhou_429 = "HTTP 429" in nota_pncp
+        if falhou_429 and pncp.empty and not anterior["pncp"].empty:
+            nota_pncp = (
+                "O PNCP respondeu HTTP 429. Exibindo a última consulta desta sessão "
+                "(não atualizada); os resultados continuam parciais. " + anterior["nota_pncp"]
+            )
+            pncp = anterior["pncp"]
+            diagnostico_pncp = anterior["diagnostico_pncp"]
+        anterior.update({
+            "pncp": pncp, "nota_pncp": nota_pncp,
+            "diagnostico_pncp": diagnostico_pncp, "pncp_consultado": True,
+        })
+
 r = st.session_state[key]
 
 st.header(f"{r['municipio']['nome']} — {r['municipio']['uf']} | {r['ano']}")
@@ -950,7 +1003,10 @@ with tab2:
         st.dataframe(r["pncp"], width="stretch", hide_index=True)
         st.download_button("Baixar registros desta página (CSV)", r["pncp"].to_csv(index=False).encode("utf-8-sig"), file_name=f"pncp_{r['municipio']['id']}_{r['ano']}.csv", mime="text/csv")
     else:
-        st.warning("A consulta não retornou registros para exibição. Não conclua que não houve contratação; verifique a pesquisa diretamente na fonte.")
+        if r.get("pncp_consultado"):
+            st.warning("Não há registros exibíveis nesta consulta. Se houve HTTP 429, tente mais tarde; não se conclui ausência de contratação.")
+        else:
+            st.caption("Consulta ainda não executada. Use o botão na barra lateral.")
     if not r["pncp"].empty:
         with st.expander("Consultar fornecedores informados nos resultados dos itens"):
             st.caption(
